@@ -216,3 +216,18 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Data
+physionet.org/
+data/
+models/
+
+# Environment
+.venv/
+.env
+
+# PDFs
+*.pdf
+
+# macOS
+.DS_Store
