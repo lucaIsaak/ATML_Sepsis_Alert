@@ -1,0 +1,32 @@
+data:
+  mimic_base: "physionet.org/files/mimiciv/3.1"
+  icu_path: "physionet.org/files/mimiciv/3.1/icu"
+  hosp_path: "physionet.org/files/mimiciv/3.1/hosp"
+  processed_path: "data/processed"
+
+cohort:
+  min_icu_los_hours: 6          # minimum ICU stay length to include
+  prediction_horizon_hours: 6   # predict sepsis N hours before onset
+  lookback_window_hours: 24     # feature window size
+
+model:
+  artifact_path: "models/lightgbm_sepsis.pkl"
+  num_leaves: 64
+  learning_rate: 0.05
+  n_estimators: 500
+  min_child_samples: 20
+  class_weight: "balanced"
+
+narrative:
+  provider: "ollama"            # "ollama" | "claude" | "huggingface"
+  ollama_model: "mistral:7b"
+  ollama_base_url: "http://localhost:11434"
+  max_tokens: 300
+
+agent:
+  risk_threshold: 0.4           # trigger alert above this score
+  poll_interval_seconds: 60     # how often agent checks for new data (simulation)
+
+app:
+  title: "SepsisAlert — ICU Early Warning"
+  port: 8501
