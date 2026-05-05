@@ -8,73 +8,102 @@ Generates:
 - Calibration plot
 """
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-from pathlib import Path
+import yaml
 from sklearn.metrics import (
-    roc_auc_score, average_precision_score,
-    roc_curve, precision_recall_curve,
+    average_precision_score,
+    roc_auc_score,
 )
 
 from src.model.predict import load_model, predict_batch
 
 
+# ------------------------------------------------------------------ #
+# NEWS2 sub-scorers (one per vital sign to keep branch count low)     #
+# ------------------------------------------------------------------ #
+
+def _score_resp_rate(rr: float) -> int:
+    """Return NEWS2 points for respiratory rate."""
+    if rr <= 8 or rr >= 25:
+        return 3
+    if rr >= 21:
+        return 2
+    if rr >= 9:
+        return 1
+    return 0
+
+
+def _score_spo2(spo2: float) -> int:
+    """Return NEWS2 points for SpO2."""
+    if spo2 <= 91:
+        return 3
+    if spo2 <= 93:
+        return 2
+    if spo2 <= 95:
+        return 1
+    return 0
+
+
+def _score_heart_rate(hr: float) -> int:
+    """Return NEWS2 points for heart rate."""
+    if hr <= 40 or hr >= 131:
+        return 3
+    if hr >= 111 or hr <= 50:
+        return 2
+    if hr >= 91:
+        return 1
+    return 0
+
+
+def _score_temperature(temp_f: float) -> int:
+    """Return NEWS2 points for temperature (Fahrenheit input)."""
+    temp_c = (temp_f - 32) * 5 / 9
+    if temp_c <= 35 or temp_c >= 39.1:
+        return 2
+    if temp_c >= 38.1:
+        return 1
+    return 0
+
+
+# ------------------------------------------------------------------ #
+# Public scorer                                                        #
+# ------------------------------------------------------------------ #
+
 def news2_score(row: pd.Series) -> int:
     """
     Compute a simplified NEWS2 score from available features.
+
     Returns integer score (higher = more abnormal).
-    NEWS2 thresholds: >=7 = high risk
+    NEWS2 thresholds: >=7 = high risk.
     """
     score = 0
 
-    # Respiratory rate
     rr = row.get("resp_rate_mean", np.nan)
     if not np.isnan(rr):
-        if rr <= 8 or rr >= 25:
-            score += 3
-        elif rr >= 21:
-            score += 2
-        elif rr >= 9:
-            score += 1
+        score += _score_resp_rate(rr)
 
-    # SpO2
     spo2 = row.get("spo2_min", np.nan)
     if not np.isnan(spo2):
-        if spo2 <= 91:
-            score += 3
-        elif spo2 <= 93:
-            score += 2
-        elif spo2 <= 95:
-            score += 1
+        score += _score_spo2(spo2)
 
-    # Heart rate
     hr = row.get("heart_rate_mean", np.nan)
     if not np.isnan(hr):
-        if hr <= 40 or hr >= 131:
-            score += 3
-        elif hr >= 111 or hr <= 50:
-            score += 2
-        elif hr >= 91 or hr <= 50:
-            score += 1
+        score += _score_heart_rate(hr)
 
-    # Consciousness / temp (simplified)
     temp = row.get("temperature_f_last", np.nan)
     if not np.isnan(temp):
-        temp_c = (temp - 32) * 5 / 9
-        if temp_c <= 35 or temp_c >= 39.1:
-            score += 2
-        elif temp_c >= 38.1:
-            score += 1
+        score += _score_temperature(temp)
 
     return score
 
 
 def evaluate(cfg: dict | None = None) -> dict:
     """Run full evaluation and return metrics dict."""
-    import yaml
     if cfg is None:
-        with open("config.yaml") as f:
+        with open("config.yaml", encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
 
     data_path = Path(cfg["data"]["processed_path"]) / "features.parquet"
@@ -88,7 +117,6 @@ def evaluate(cfg: dict | None = None) -> dict:
 
     # NEWS2 baseline
     news2_scores = df.apply(news2_score, axis=1).values
-    news2_binary = (news2_scores >= 7).astype(int)
 
     auroc = roc_auc_score(y_true, y_score)
     auprc = average_precision_score(y_true, y_score)

@@ -1,19 +1,20 @@
 """
 Model inference for a single patient or batch.
 
-Loads the saved LightGBM artifact and returns a risk score (0–1)
+Loads the saved artifact and returns a risk score (0–1)
 along with the feature vector used (needed for SHAP).
 """
 
+from pathlib import Path
+
 import joblib
-import numpy as np
 import pandas as pd
 import yaml
-from pathlib import Path
 
 
 def load_config(config_path: str = "config.yaml") -> dict:
-    with open(config_path) as f:
+    """Load YAML configuration file and return as dict."""
+    with open(config_path, encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
@@ -49,8 +50,8 @@ def predict_patient(features: dict, artifact: dict | None = None) -> dict:
     feature_cols = artifact["feature_cols"]
 
     # Align to expected feature order, fill missing with NaN
-    X = pd.DataFrame([features])[feature_cols]
-    risk_score = float(model.predict_proba(X)[0, 1])
+    feat_df = pd.DataFrame([features])[feature_cols]
+    risk_score = float(model.predict_proba(feat_df)[0, 1])
 
     if risk_score >= 0.6:
         label = "HIGH"
@@ -62,7 +63,7 @@ def predict_patient(features: dict, artifact: dict | None = None) -> dict:
     return {
         "risk_score": risk_score,
         "risk_label": label,
-        "feature_vector": X.values[0],
+        "feature_vector": feat_df.values[0],
         "feature_names": feature_cols,
     }
 
@@ -79,8 +80,8 @@ def predict_batch(df: pd.DataFrame, artifact: dict | None = None) -> pd.DataFram
     model = artifact["model"]
     feature_cols = artifact["feature_cols"]
 
-    X = df[feature_cols]
-    proba = model.predict_proba(X)[:, 1]
+    feat_matrix = df[feature_cols]
+    proba = model.predict_proba(feat_matrix)[:, 1]
 
     result = df.copy()
     result["risk_score"] = proba
