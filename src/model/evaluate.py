@@ -1,11 +1,13 @@
 """
 Model evaluation and comparison against NEWS2 baseline.
 
+Evaluates on a held-out test set (same 80/20 split used during training)
+so reported numbers reflect true out-of-sample performance.
+
 Generates:
-- AUROC, AUPRC curves
-- Sensitivity / specificity at different thresholds
-- Alert fatigue comparison vs NEWS2 rule-based threshold
-- Calibration plot
+- AUROC, AUPRC on held-out test set
+- NEWS2 baseline comparison (same test set)
+- Sensitivity / specificity at clinical thresholds
 """
 
 from pathlib import Path
@@ -17,6 +19,7 @@ from sklearn.metrics import (
     average_precision_score,
     roc_auc_score,
 )
+from sklearn.model_selection import train_test_split
 
 from src.model.predict import load_model, predict_batch
 
@@ -101,7 +104,12 @@ def news2_score(row: pd.Series) -> int:
 
 
 def evaluate(cfg: dict | None = None) -> dict:
-    """Run full evaluation and return metrics dict."""
+    """
+    Run evaluation on the held-out test set and return metrics dict.
+
+    Uses the same random_state=42 stratified 80/20 split as train.py
+    so reported AUROC reflects true out-of-sample performance.
+    """
     if cfg is None:
         with open("config.yaml", encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
@@ -109,14 +117,19 @@ def evaluate(cfg: dict | None = None) -> dict:
     data_path = Path(cfg["data"]["processed_path"]) / "features.parquet"
     df = pd.read_parquet(data_path)
 
+    # Reproduce the exact train/test split from train.py
+    _, df_test = train_test_split(
+        df, test_size=0.2, random_state=42, stratify=df["sepsis_label"]
+    )
+
     artifact = load_model(cfg)
-    results = predict_batch(df, artifact)
+    results = predict_batch(df_test, artifact)
 
     y_true = results["sepsis_label"].values
     y_score = results["risk_score"].values
 
-    # NEWS2 baseline
-    news2_scores = df.apply(news2_score, axis=1).values
+    # NEWS2 baseline — same test set
+    news2_scores = df_test.apply(news2_score, axis=1).values
 
     auroc = roc_auc_score(y_true, y_score)
     auprc = average_precision_score(y_true, y_score)
@@ -126,13 +139,15 @@ def evaluate(cfg: dict | None = None) -> dict:
         "auroc": auroc,
         "auprc": auprc,
         "news2_auroc": news2_auroc,
-        "n_patients": len(df),
+        "n_test": len(df_test),
         "sepsis_prevalence": float(y_true.mean()),
     }
 
+    print(f"Evaluation on held-out test set ({len(df_test):,} stays)")
     print(f"SepsisAlert AUROC: {auroc:.4f}")
     print(f"SepsisAlert AUPRC: {auprc:.4f}")
     print(f"NEWS2 AUROC:       {news2_auroc:.4f}")
+    print(f"Gap vs NEWS2:      +{auroc - news2_auroc:.4f}")
 
     return metrics
 

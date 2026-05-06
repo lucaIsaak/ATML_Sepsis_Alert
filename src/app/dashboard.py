@@ -141,10 +141,9 @@ def render_live_monitor(predictions, cohort):
 
     # Simulate "active" patients — sample 50 for demo
     demo = predictions.sample(50, random_state=99).copy()
-    demo = demo.merge(
-        cohort[["stay_id", "first_careunit", "age", "gender", "intime"]],
-        on="stay_id", how="left"
-    )
+    cohort_cols = [c for c in ["stay_id", "first_careunit", "age", "gender", "intime"]
+                   if c in cohort.columns]
+    demo = demo.merge(cohort[cohort_cols], on="stay_id", how="left")
     demo = demo.sort_values("risk_score", ascending=False).reset_index(drop=True)
 
     # KPI cards
@@ -178,9 +177,13 @@ def render_live_monitor(predictions, cohort):
     st.caption("Sorted by risk score. Select a patient in the sidebar to see details.")
 
     # Format table
-    display = demo[["stay_id", "first_careunit", "age", "risk_score", "risk_label"]].copy()
+    table_cols = [c for c in ["stay_id", "first_careunit", "age", "risk_score", "risk_label"]
+                  if c in demo.columns]
+    display = demo[table_cols].copy()
     display["risk_score"] = display["risk_score"].round(3)
-    display.columns = ["Stay ID", "Care Unit", "Age", "Risk Score", "Risk Level"]
+    col_labels = {"stay_id": "Stay ID", "first_careunit": "Care Unit",
+                  "age": "Age", "risk_score": "Risk Score", "risk_label": "Risk Level"}
+    display.columns = [col_labels[c] for c in table_cols]
 
     def highlight_risk(row):
         """Apply row background colour based on risk level."""
