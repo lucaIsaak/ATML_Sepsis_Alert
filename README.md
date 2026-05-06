@@ -11,7 +11,7 @@ Sepsis kills **11 million people/year** — 1 in 5 global deaths. In European IC
 
 Current tools (NEWS2, SIRS) are static, rule-based, and provide **no explanation** for why an alert was triggered. Clinicians receive a score they can't trust, leading to alert fatigue.
 
-**SepsisAlert solves this**: a LightGBM model detects sepsis 4–6 hours early, SHAP traces every alert to its exact clinical cause, and a local LLM translates the output into plain-language explanations nurses can act on immediately.
+**SepsisAlert solves this**: a gradient boosting model detects sepsis 4–6 hours early, SHAP traces every alert to its exact clinical cause, and a local LLM translates the output into plain-language explanations nurses can act on immediately.
 
 ---
 
@@ -24,10 +24,10 @@ MIMIC-IV / Hospital EHR
     │  DuckDB  │   ← fast SQL directly on raw .csv.gz files
     └────┬────┘
          │  cohort + features (24h rolling windows)
-    ┌────▼──────────┐
-    │  LightGBM     │   ← trained on MIMIC-IV, sepsis-3 labels
-    │  (local .pkl) │
-    └────┬──────────┘
+    ┌────▼──────────────────────────┐
+    │  HistGradientBoosting         │   ← trained on MIMIC-IV, sepsis-3 labels
+    │  (sklearn, no native deps)    │
+    └────┬──────────────────────────┘
          │  risk score (0–1)
     ┌────▼──────┐
     │   SHAP    │   ← top contributing features per patient
@@ -67,7 +67,7 @@ This maps directly to real clinical deployment: the agent replaces a nurse manua
 class PatientMonitorAgent:
     tools = [
         fetch_latest_vitals,      # pull new chartevents / labevents
-        run_sepsis_model,         # LightGBM inference → risk score
+        run_sepsis_model,         # HistGradientBoosting inference → risk score
         explain_with_shap,        # SHAP top-5 feature drivers
         generate_narrative,       # Ollama → plain-language explanation
         dispatch_alert,           # send to dashboard / log
@@ -121,10 +121,20 @@ We use the **Sepsis-3 ICD-10 proxy** from `diagnoses_icd`:
 
 ## Model
 
-- **Algorithm**: LightGBM (gradient boosting, fast inference, works well on tabular EHR data)
-- **Training data**: MIMIC-IV ICU cohort (~50k stays)
-- **Label**: Sepsis-3 onset within next 6 hours (binary classification)
-- **Evaluation**: AUROC, sensitivity/specificity, alert fatigue reduction vs NEWS2
+- **Algorithm**: `sklearn.HistGradientBoostingClassifier` — same algorithm as LightGBM, pure Python, no native library dependencies, natively handles NaN values
+- **Hyperparameters**: tuned with Optuna Bayesian optimisation (50-trial search, 5-fold stratified CV)
+- **Training data**: MIMIC-IV ICU cohort (93,224 stays — adults, ICU LOS ≥ 6h)
+- **Features**: 24h vitals + labs per patient, including mean / min / max / last / **trend** (linear slope) per variable
+- **Label**: Sepsis-3 ICD-10 discharge diagnosis (`A41.*`, `R65.2*`) — binary classification
+- **Performance**: AUROC 0.895 vs NEWS2 baseline 0.614 (+0.281)
+
+### Labelling strategy & known limitation
+
+Labels are assigned at the **stay level** from ICD-10 discharge codes. This is the standard approach in MIMIC-IV sepsis research (Reyna et al., PhysioNet 2019 Challenge) and produces a clean training signal.
+
+**Known limitation**: a discharge-level label does not capture the exact time of sepsis onset within the stay. A patient labelled `sepsis=1` may appear clinically normal during the first hours of training data. This is accepted for a research/university setting.
+
+**Future work**: replace the static 24h training window with a rolling per-hour labelling strategy where each observation window is labelled based on whether sepsis onset occurred within the subsequent 6 hours — aligning training distribution exactly with deployment conditions.
 
 ---
 
@@ -148,7 +158,8 @@ ATML_Sepsis_Alert/
 │   │   ├── features.py         # Feature engineering (rolling windows)
 │   │   └── labels.py           # Sepsis-3 label generation
 │   ├── model/
-│   │   ├── train.py            # LightGBM training
+│   │   ├── train.py            # Model training (HistGradientBoosting)
+│   │   ├── tune.py             # Optuna hyperparameter search
 │   │   ├── evaluate.py         # AUROC, NEWS2 comparison
 │   │   └── predict.py          # Inference
 │   ├── explainability/
@@ -176,7 +187,7 @@ ATML_Sepsis_Alert/
 | Layer | Technology | Rationale |
 |-------|-----------|-----------|
 | Data processing | DuckDB | Queries .csv.gz directly, no data loading overhead |
-| ML model | LightGBM | Best-in-class for tabular EHR data, fast inference |
+| ML model | sklearn HistGradientBoosting + Optuna | Best-in-class for tabular EHR data, no native deps, Bayesian-tuned |
 | Explainability | SHAP | Industry standard, directly interpretable |
 | Narrative LLM | Ollama / mistral:7b | On-premise, GDPR-compliant, zero per-call cost |
 | Frontend | Streamlit | Fast to build, clinical dashboard-friendly |
@@ -198,7 +209,7 @@ ATML_Sepsis_Alert/
 
 ## Why Not Just a Wrapper
 
-SepsisAlert is **not** a ChatGPT wrapper. The LLM only generates the explanation — the risk score comes from a validated LightGBM model trained on real ICU outcomes. The LLM is grounded on SHAP output and cannot override the model score. This satisfies EU AI Act CDSS compliance requirements that pure LLM outputs cannot.
+SepsisAlert is **not** a ChatGPT wrapper. The LLM only generates the explanation — the risk score comes from a validated gradient boosting model trained on real ICU outcomes. The LLM is grounded on SHAP output and cannot override the model score. This satisfies EU AI Act CDSS compliance requirements that pure LLM outputs cannot.
 
 ---
 
