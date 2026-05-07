@@ -1,144 +1,374 @@
 """
-PatientMonitorAgent — the core agentic loop of SepsisAlert.
+PatientMonitorAgent — ReAct-pattern sepsis monitoring agent.
 
-The agent monitors active ICU patients, runs inference when new data
-arrives, generates SHAP explanations and LLM narratives for high-risk
-patients, and dispatches alerts to the dashboard.
+ReAct = Reason + Act loop.
+The agent doesn't just run a pipeline — it reasons about each patient's
+state, consults memory, and decides what action to take.
 
-Tool pattern:
-    Each "tool" is a method the agent can call. The agent decides
-    WHICH tool to call based on patient state, mirroring a real
-    clinical decision workflow.
+Escalation tiers:
+  Tier 0 — No alert (risk < threshold)
+  Tier 1 — Nurse alert (risk >= 0.4, SBAR narrative)
+  Tier 2 — Doctor alert (risk >= 0.6, detailed summary + suggested workup)
+  Tier 3 — Critical escalation (risk >= 0.8 OR rapid deterioration)
 
-Usage:
-    agent = PatientMonitorAgent()
-    alerts = agent.run_cycle(patient_data_df)
+Per-patient memory:
+  - Alert history (timestamp, score, tier, acknowledged)
+  - Risk trajectory (is patient improving or deteriorating?)
+  - Time since last physician notification
 """
 
-import time
-import yaml
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from enum import IntEnum
+from pathlib import Path
+from typing import Optional
+
 import numpy as np
 import pandas as pd
-from dataclasses import dataclass, field
-from datetime import datetime
-from pathlib import Path
+import yaml
 
-import shap
-
+from src.data.patient_buffer import BufferRegistry, Observation
+from src.explainability.shap_explainer import SHAPExplanation, build_explainer, explain_patient
 from src.model.predict import load_model, predict_patient
-from src.explainability.shap_explainer import (
-    build_explainer, explain_patient, SHAPExplanation
-)
 from src.narrative.ollama_client import OllamaClient
+from src.safety.guardrails import AuditLogger, InputGuard, NarrativeGuard
+
+
+# ------------------------------------------------------------------ #
+# Data structures                                                      #
+# ------------------------------------------------------------------ #
+
+class EscalationTier(IntEnum):
+    """Alert escalation levels for ICU staff notification."""
+
+    NONE     = 0   # risk < 0.4
+    NURSE    = 1   # risk 0.4-0.6
+    DOCTOR   = 2   # risk 0.6-0.8
+    CRITICAL = 3   # risk > 0.8 OR rapid deterioration
 
 
 @dataclass
-class Alert:
-    """A dispatched sepsis alert for one patient."""
+class AlertRecord:  # pylint: disable=too-many-instance-attributes
+    """A single alert dispatched for a patient at a point in time."""
+
     stay_id: str
     timestamp: datetime
     risk_score: float
-    risk_label: str
+    tier: EscalationTier
+    nurse_narrative: Optional[str]
+    doctor_narrative: Optional[str]
     top_features: list[dict]
-    narrative: str
-    acknowledged: bool = False
-    patient_context: str = ""
+    acknowledged_nurse: bool = False
+    acknowledged_doctor: bool = False
+    escalated_from: Optional[EscalationTier] = None
 
 
-class PatientMonitorAgent:
+@dataclass
+class PatientMemory:
+    """Per-patient state the agent maintains across time steps."""
+
+    stay_id: str
+    risk_history: list[tuple[datetime, float]] = field(default_factory=list)
+    alert_history: list[AlertRecord] = field(default_factory=list)
+    last_doctor_notification: Optional[datetime] = None
+    suppressed_until: Optional[datetime] = None   # avoid alert fatigue
+
+    def record_score(self, timestamp: datetime, score: float) -> None:
+        """Append a risk score observation and cap history at 48 entries."""
+        self.risk_history.append((timestamp, score))
+        if len(self.risk_history) > 48:   # keep last 48 time steps
+            self.risk_history = self.risk_history[-48:]
+
+    @property
+    def trend(self) -> float:
+        """Risk trend over last 3 observations. Positive = worsening."""
+        if len(self.risk_history) < 3:
+            return 0.0
+        recent = [s for _, s in self.risk_history[-3:]]
+        return recent[-1] - recent[0]
+
+    @property
+    def last_risk_score(self) -> Optional[float]:
+        """Return the most recent risk score, or None if no history."""
+        if not self.risk_history:
+            return None
+        return self.risk_history[-1][1]
+
+    @property
+    def is_deteriorating_rapidly(self) -> bool:
+        """True if risk increased >0.2 in last 3 time steps."""
+        return self.trend >= 0.20
+
+    def is_suppressed(self, now: datetime) -> bool:
+        """Return True if alert suppression is still active."""
+        if self.suppressed_until is None:
+            return False
+        return now < self.suppressed_until
+
+    def suppress(self, hours: float, now: datetime) -> None:
+        """Suppress alerts for the given number of hours from now."""
+        self.suppressed_until = now + timedelta(hours=hours)
+
+
+# ------------------------------------------------------------------ #
+# Agent                                                                #
+# ------------------------------------------------------------------ #
+
+class PatientMonitorAgent:  # pylint: disable=too-many-instance-attributes
     """
-    Agentic monitoring loop for active ICU patients.
+    ReAct-pattern agent for ICU sepsis monitoring.
 
-    The agent maintains a state dict of seen patients and only
-    re-alerts if risk materially changes (avoids alert fatigue).
+    The agent loop per patient:
+      OBSERVE  -> get latest features from buffer
+      THINK    -> reason about risk, trend, memory, escalation tier
+      ACT      -> call the right tools for the right tier
+      REMEMBER -> update patient memory
     """
 
     def __init__(self, cfg: dict | None = None):
+        """Initialise agent — loads model, narrative client, and registry."""
         if cfg is None:
-            with open("config.yaml") as f:
+            with open("config.yaml", encoding="utf-8") as f:
                 cfg = yaml.safe_load(f)
-
         self.cfg = cfg
-        self.threshold = cfg["agent"]["risk_threshold"]
-        self.artifact = load_model(cfg)
-        self.narrative_client = OllamaClient(cfg)
 
-        # Build SHAP explainer using a small background dataset
-        background = self._load_background()
-        self.explainer = build_explainer(
-            self.artifact["model"],
-            background[self.artifact["feature_cols"]],
-        )
+        # Core components
+        self.artifact     = load_model(cfg)
+        self.narrative    = OllamaClient(cfg)
+        self.registry     = BufferRegistry(window_hours=cfg["cohort"]["lookback_window_hours"])
 
-        # State: {stay_id: last_risk_score}
-        self._patient_state: dict[str, float] = {}
-        self._alert_log: list[Alert] = []
+        # Safety guardrails (Layer 1, 2, 3)
+        self.input_guard     = InputGuard.from_artifact(self.artifact)
+        self.narrative_guard = NarrativeGuard()
+        self.audit_logger    = AuditLogger(log_path="logs/audit.jsonl")
 
-    # ------------------------------------------------------------------ #
-    # Public interface                                                      #
-    # ------------------------------------------------------------------ #
+        # SHAP explainer (built lazily on first use)
+        self._explainer   = None
 
-    def run_cycle(self, patient_df: pd.DataFrame) -> list[Alert]:
+        # Per-patient memory
+        self._memory: dict[str, PatientMemory] = {}
+
+        # Global alert log (all tiers)
+        self.alert_log: list[AlertRecord] = []
+
+        # Thresholds
+        self.threshold_nurse    = cfg["agent"]["risk_threshold"]       # 0.4
+        self.threshold_doctor   = 0.6
+        self.threshold_critical = 0.8
+        self.min_rescore_gap_h  = 1.0   # don't re-alert within 1h unless deteriorating
+
+    # ---------------------------------------------------------------- #
+    # Public API                                                         #
+    # ---------------------------------------------------------------- #
+
+    def push_observation(self, stay_id: str, obs: Observation) -> None:
+        """Push a new observation into the patient buffer."""
+        self.registry.push(stay_id, obs)
+
+    def run_cycle(self, timestamp: datetime | None = None) -> list[AlertRecord]:
         """
         Run one monitoring cycle over all active patients.
 
-        Args:
-            patient_df: DataFrame with one row per active ICU patient.
-                        Must have columns matching the model feature set.
-
-        Returns:
-            List of new Alert objects generated this cycle.
+        Called periodically (e.g. every 15-60 minutes in production).
+        Returns new alerts generated this cycle.
         """
+        if timestamp is None:
+            timestamp = datetime.now()
+
         new_alerts = []
+        features_df = self.registry.get_all_features()
 
-        for _, row in patient_df.iterrows():
-            stay_id = str(row.get("stay_id", "unknown"))
-            features = row.to_dict()
+        if features_df.empty:
+            return new_alerts
 
-            # Tool 1: Run sepsis model
-            prediction = self._tool_run_model(features)
-            risk_score = prediction["risk_score"]
-
-            # Decide whether to alert
-            if not self._should_alert(stay_id, risk_score):
-                continue
-
-            # Tool 2: Explain with SHAP
-            explanation = self._tool_explain(
-                prediction["feature_vector"],
-                prediction["feature_names"],
-                risk_score,
-                stay_id,
-            )
-
-            # Tool 3: Generate narrative
-            patient_context = self._build_context(row)
-            narrative = self._tool_generate_narrative(explanation, patient_context)
-
-            # Tool 4: Dispatch alert
-            alert = self._tool_dispatch_alert(explanation, narrative, patient_context)
-            new_alerts.append(alert)
-
-            # Update state
-            self._patient_state[stay_id] = risk_score
+        for _, row in features_df.iterrows():
+            stay_id = str(row["stay_id"])
+            alert = self._process_patient(stay_id, row.to_dict(), timestamp)
+            if alert:
+                new_alerts.append(alert)
 
         return new_alerts
 
-    def get_alert_log(self) -> list[Alert]:
-        return self._alert_log
+    def process_streaming_batch(
+        self,
+        timestamp: datetime,
+        observations: list,
+    ) -> list[AlertRecord]:
+        """
+        Process a batch of streaming observations.
 
-    def acknowledge_alert(self, stay_id: str) -> None:
-        for alert in self._alert_log:
-            if alert.stay_id == stay_id and not alert.acknowledged:
-                alert.acknowledged = True
-                break
+        Accepts output from MIMICStreamSimulator or a live FHIR webhook.
+        """
+        # Route each observation to the right patient buffer
+        for obs in observations:
+            stay_id = getattr(obs, "stay_id", None)
+            if stay_id:
+                self.registry.push(stay_id, obs)
 
-    # ------------------------------------------------------------------ #
-    # Tools (internal)                                                      #
-    # ------------------------------------------------------------------ #
+        return self.run_cycle(timestamp)
+
+    def acknowledge(self, stay_id: str, role: str = "nurse") -> None:
+        """Mark the latest alert for a patient as acknowledged."""
+        mem = self._get_memory(stay_id)
+        if mem.alert_history:
+            alert = mem.alert_history[-1]
+            if role == "nurse":
+                alert.acknowledged_nurse = True
+            else:
+                alert.acknowledged_doctor = True
+                mem.last_doctor_notification = datetime.now()
+
+    # ---------------------------------------------------------------- #
+    # ReAct core                                                         #
+    # ---------------------------------------------------------------- #
+
+    def _process_patient(  # pylint: disable=too-many-locals
+        self, stay_id: str, features: dict, timestamp: datetime
+    ) -> Optional[AlertRecord]:
+        """
+        ReAct loop for a single patient.
+
+        Returns an AlertRecord if an alert should be dispatched.
+        """
+        mem = self._get_memory(stay_id)
+
+        # === OBSERVE ===
+        # Layer 1: check inputs before running the model
+        ood = self.input_guard.check(features)
+        prediction = self._tool_run_model(features)
+        risk_score = prediction["risk_score"]
+
+        # === THINK ===
+        mem.record_score(timestamp, risk_score)
+        tier = self._reason_escalation_tier(risk_score, mem, timestamp)
+
+        # No action needed
+        if tier == EscalationTier.NONE:
+            return None
+
+        # Suppressed to avoid fatigue
+        if mem.is_suppressed(timestamp) and not mem.is_deteriorating_rapidly:
+            return None
+
+        # === ACT ===
+        from src.explainability.shap_explainer import format_for_narrative  # pylint: disable=import-outside-toplevel
+        explanation = self._tool_explain(
+            prediction["feature_vector"],
+            prediction["feature_names"],
+            risk_score,
+            stay_id,
+        )
+
+        nurse_narrative = None
+        doctor_narrative = None
+        nurse_nar_result = None
+        patient_context = self._build_context(stay_id)
+
+        if tier >= EscalationTier.NURSE:
+            raw_nurse = self._tool_nurse_alert(explanation, patient_context)
+            # Layer 2: validate narrative, replace if unsafe
+            nurse_nar_result = self.narrative_guard.validate(
+                raw_nurse, format_for_narrative(explanation)
+            )
+            nurse_narrative = nurse_nar_result.text
+
+        if tier >= EscalationTier.DOCTOR:
+            raw_doctor = self._tool_doctor_summary(explanation, patient_context)
+            doctor_result = self.narrative_guard.validate(
+                raw_doctor, format_for_narrative(explanation)
+            )
+            doctor_narrative = doctor_result.text
+            mem.last_doctor_notification = timestamp
+
+        if tier == EscalationTier.CRITICAL:
+            self._tool_critical_escalation(stay_id, risk_score, mem)
+
+        alert = AlertRecord(
+            stay_id=stay_id,
+            timestamp=timestamp,
+            risk_score=risk_score,
+            tier=tier,
+            nurse_narrative=nurse_narrative,
+            doctor_narrative=doctor_narrative,
+            top_features=explanation.top_features,
+            escalated_from=(
+                EscalationTier(int(tier) - 1) if tier > EscalationTier.NURSE else None
+            ),
+        )
+
+        # Layer 3: audit log every dispatched alert
+        self.audit_logger.log_alert(
+            stay_id=stay_id,
+            risk_score=risk_score,
+            tier=tier.name,
+            top_features=explanation.top_features,
+            ood_result=ood,
+            narrative_result=nurse_nar_result or self.narrative_guard.validate("", ""),
+            timestamp=timestamp,
+        )
+
+        # === REMEMBER ===
+        mem.alert_history.append(alert)
+        self.alert_log.append(alert)
+
+        # Suppress re-alerting for 2h unless critical
+        if tier < EscalationTier.CRITICAL:
+            mem.suppress(hours=2.0, now=timestamp)
+
+        ood_flag = f" [{ood.confidence_flag}]" if ood.confidence_flag != "NORMAL" else ""
+        print(
+            f"[{timestamp.strftime('%H:%M')}] "
+            f"Stay {stay_id} | {tier.name} | score={risk_score:.3f} | "
+            f"trend={mem.trend:+.2f}{ood_flag}"
+        )
+
+        return alert
+
+    def _reason_escalation_tier(
+        self,
+        risk_score: float,
+        mem: PatientMemory,
+        timestamp: datetime,
+    ) -> EscalationTier:
+        """
+        THINK step: decide escalation tier.
+
+        Considers:
+        - Current risk score
+        - Rate of deterioration
+        - Time since last alert
+        - Whether physician has been notified recently
+        """
+        # Rapid deterioration overrides score thresholds
+        if mem.is_deteriorating_rapidly and risk_score >= self.threshold_nurse:
+            return (
+                EscalationTier.CRITICAL
+                if risk_score >= self.threshold_doctor
+                else EscalationTier.DOCTOR
+            )
+
+        if risk_score >= self.threshold_critical:
+            return EscalationTier.CRITICAL
+        if risk_score >= self.threshold_doctor:
+            # Escalate to doctor — but only if not recently notified
+            if mem.last_doctor_notification:
+                hours_since = (timestamp - mem.last_doctor_notification).total_seconds() / 3600
+                if hours_since < 4.0:
+                    return EscalationTier.NURSE   # downgrade — doc already knows
+            return EscalationTier.DOCTOR
+        if risk_score >= self.threshold_nurse:
+            return EscalationTier.NURSE
+
+        return EscalationTier.NONE
+
+    # ---------------------------------------------------------------- #
+    # Tools                                                              #
+    # ---------------------------------------------------------------- #
 
     def _tool_run_model(self, features: dict) -> dict:
-        """Tool: Run LightGBM inference. Returns risk score + feature vector."""
+        """Run the sepsis model for one patient and return prediction dict."""
         return predict_patient(features, self.artifact)
 
     def _tool_explain(
@@ -148,84 +378,80 @@ class PatientMonitorAgent:
         risk_score: float,
         stay_id: str,
     ) -> SHAPExplanation:
-        """Tool: Compute SHAP explanation for this prediction."""
-        return explain_patient(
-            self.explainer,
-            feature_vector,
-            feature_names,
-            risk_score,
-            stay_id,
-        )
+        """Compute SHAP explanation for a single patient."""
+        explainer = self._get_explainer()
+        return explain_patient(explainer, feature_vector, feature_names, risk_score, stay_id)
 
-    def _tool_generate_narrative(
-        self,
-        explanation: SHAPExplanation,
-        patient_context: str,
-    ) -> str:
-        """Tool: Call local LLM to generate clinical narrative."""
-        return self.narrative_client.generate_alert(explanation, patient_context)
+    def _tool_nurse_alert(self, explanation: SHAPExplanation, context: str) -> str:
+        """Generate a nurse-facing SBAR narrative."""
+        return self.narrative.generate_nurse_alert(explanation, context)
 
-    def _tool_dispatch_alert(
-        self,
-        explanation: SHAPExplanation,
-        narrative: str,
-        patient_context: str,
-    ) -> Alert:
-        """Tool: Create and log the alert."""
-        label = (
-            "HIGH" if explanation.risk_score >= 0.6
-            else "MODERATE" if explanation.risk_score >= 0.4
-            else "LOW"
-        )
-        alert = Alert(
-            stay_id=explanation.stay_id,
-            timestamp=datetime.now(),
-            risk_score=explanation.risk_score,
-            risk_label=label,
-            top_features=explanation.top_features,
-            narrative=narrative,
-            patient_context=patient_context,
-        )
-        self._alert_log.append(alert)
-        print(f"[ALERT] Stay {alert.stay_id} | {label} ({alert.risk_score:.2f}) | {alert.timestamp}")
-        return alert
+    def _tool_doctor_summary(self, explanation: SHAPExplanation, context: str) -> str:
+        """Generate a physician-facing clinical summary."""
+        return self.narrative.generate_doctor_summary(explanation, context)
 
-    # ------------------------------------------------------------------ #
-    # Helpers                                                               #
-    # ------------------------------------------------------------------ #
-
-    def _should_alert(self, stay_id: str, risk_score: float) -> bool:
+    def _tool_critical_escalation(
+        self, stay_id: str, risk_score: float, mem: PatientMemory
+    ) -> None:
         """
-        Alert if:
-        - Risk exceeds threshold AND
-        - Patient not yet alerted, OR risk increased by >0.15 since last alert
+        Critical tier: log for immediate response.
+
+        In production: trigger pager / EHR alert banner.
         """
-        if risk_score < self.threshold:
-            return False
-        prev = self._patient_state.get(stay_id)
-        if prev is None:
-            return True
-        return (risk_score - prev) >= 0.15
+        print(
+            f"[CRITICAL] Stay {stay_id} | score={risk_score:.3f} | "
+            f"trend={mem.trend:+.2f} | "
+            f"IMMEDIATE INTERVENTION REQUIRED"
+        )
 
-    def _build_context(self, row: pd.Series) -> str:
-        """Build a non-identifying patient context string."""
-        parts = []
-        age = row.get("age")
-        gender = row.get("gender_male")
-        if age and not np.isnan(float(age)):
-            parts.append(f"{int(age)}yo")
-        if gender is not None:
-            parts.append("M" if gender == 1 else "F")
-        unit = row.get("first_careunit", "")
-        if unit:
-            parts.append(str(unit))
-        return " | ".join(parts)
+    # ---------------------------------------------------------------- #
+    # Helpers                                                            #
+    # ---------------------------------------------------------------- #
 
-    def _load_background(self, n_samples: int = 200) -> pd.DataFrame:
-        """Load a background sample for SHAP explainer."""
-        path = Path(self.cfg["data"]["processed_path"]) / "features.parquet"
-        if not path.exists():
-            # Return empty DataFrame if no data yet (for testing)
-            return pd.DataFrame(columns=self.artifact["feature_cols"])
-        df = pd.read_parquet(path)
-        return df.sample(min(n_samples, len(df)), random_state=42)
+    def _get_memory(self, stay_id: str) -> PatientMemory:
+        """Return or initialise per-patient memory."""
+        if stay_id not in self._memory:
+            self._memory[stay_id] = PatientMemory(stay_id=stay_id)
+        return self._memory[stay_id]
+
+    def _get_explainer(self):
+        """Build and cache SHAP explainer (lazy initialisation)."""
+        if self._explainer is None:
+            path = Path(self.cfg["data"]["processed_path"]) / "features.parquet"
+            if path.exists():
+                df = pd.read_parquet(path)
+                background = df[self.artifact["feature_cols"]].dropna().sample(
+                    min(100, len(df)), random_state=42
+                )
+            else:
+                background = pd.DataFrame(columns=self.artifact["feature_cols"])
+            self._explainer = build_explainer(self.artifact["model"], background)
+        return self._explainer
+
+    def _build_context(self, stay_id: str) -> str:
+        """Build a one-line patient context string for the LLM prompt."""
+        buf = self.registry.get_buffer(stay_id)
+        if buf is None:
+            return stay_id
+        mem = self._memory.get(stay_id)
+        trend_str = ""
+        if mem and len(mem.risk_history) >= 2:
+            trend_str = f" | trend {mem.trend:+.2f}"
+        return (
+            f"Stay {stay_id} | {buf.hours_of_data:.1f}h data"
+            f" | {buf.n_observations} obs{trend_str}"
+        )
+
+    def summary(self) -> dict:
+        """Summary statistics for dashboard display."""
+        tiers = [a.tier for a in self.alert_log]
+        return {
+            "total_alerts": len(self.alert_log),
+            "critical": tiers.count(EscalationTier.CRITICAL),
+            "doctor": tiers.count(EscalationTier.DOCTOR),
+            "nurse": tiers.count(EscalationTier.NURSE),
+            "active_patients": len(self.registry.active_patients),
+            "unacknowledged": sum(
+                1 for a in self.alert_log if not a.acknowledged_nurse
+            ),
+        }

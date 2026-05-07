@@ -1,22 +1,26 @@
 """
-LightGBM training for sepsis prediction.
+Gradient boosting training for sepsis prediction.
+
+Uses sklearn HistGradientBoostingClassifier — same algorithm as LightGBM,
+pure Python, no native library dependencies, natively handles NaN values.
 
 Input:  feature matrix (stay_id + features + sepsis_label)
-Output: trained model saved to models/lightgbm_sepsis.pkl
+Output: trained model saved to models/sepsis_model.pkl
 """
 
-import joblib
-import yaml
-import numpy as np
-import pandas as pd
 from pathlib import Path
+
+import joblib
+import pandas as pd
+import yaml
+from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.metrics import classification_report, roc_auc_score
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import roc_auc_score, classification_report
-import lightgbm as lgb
 
 
 def load_config(config_path: str = "config.yaml") -> dict:
-    with open(config_path) as f:
+    """Load YAML configuration file and return as dict."""
+    with open(config_path, encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
@@ -26,7 +30,8 @@ def get_feature_cols(df: pd.DataFrame) -> list[str]:
     return [c for c in df.columns if c not in exclude]
 
 
-def train(cfg: dict | None = None) -> lgb.LGBMClassifier:
+def train(cfg: dict | None = None) -> HistGradientBoostingClassifier:
+    """Train the sepsis model and save the artifact to disk."""
     if cfg is None:
         cfg = load_config()
 
@@ -34,42 +39,40 @@ def train(cfg: dict | None = None) -> lgb.LGBMClassifier:
     df = pd.read_parquet(data_path)
 
     feature_cols = get_feature_cols(df)
-    X = df[feature_cols]
+    features = df[feature_cols]
     y = df["sepsis_label"]
 
     print(f"Training on {len(df):,} stays | "
           f"Sepsis prevalence: {y.mean():.1%} | "
           f"Features: {len(feature_cols)}")
 
-    X_train, X_val, y_train, y_val = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
+    x_train, x_val, y_train, y_val = train_test_split(
+        features, y, test_size=0.2, random_state=42, stratify=y
     )
 
     model_cfg = cfg["model"]
-    model = lgb.LGBMClassifier(
-        num_leaves=model_cfg["num_leaves"],
+    model = HistGradientBoostingClassifier(
+        max_leaf_nodes=model_cfg["num_leaves"],
         learning_rate=model_cfg["learning_rate"],
-        n_estimators=model_cfg["n_estimators"],
-        min_child_samples=model_cfg["min_child_samples"],
+        max_iter=model_cfg["n_estimators"],
+        min_samples_leaf=model_cfg["min_child_samples"],
         class_weight=model_cfg["class_weight"],
         random_state=42,
-        n_jobs=-1,
-        verbose=-1,
+        early_stopping=True,
+        validation_fraction=0.1,
+        n_iter_no_change=50,
+        verbose=1,
     )
 
-    model.fit(
-        X_train, y_train,
-        eval_set=[(X_val, y_val)],
-        callbacks=[lgb.early_stopping(50, verbose=False),
-                   lgb.log_evaluation(100)],
-    )
+    model.fit(x_train, y_train)
 
-    val_proba = model.predict_proba(X_val)[:, 1]
+    val_proba = model.predict_proba(x_val)[:, 1]
     auroc = roc_auc_score(y_val, val_proba)
     print(f"\nValidation AUROC: {auroc:.4f}")
 
-    val_pred = (val_proba >= 0.4).astype(int)
-    print(classification_report(y_val, val_pred, target_names=["No Sepsis", "Sepsis"]))
+    print(classification_report(
+        y_val, (val_proba >= 0.4).astype(int), target_names=["No Sepsis", "Sepsis"]
+    ))
 
     # Save
     artifact_path = Path(model_cfg["artifact_path"])

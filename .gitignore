@@ -231,3 +231,6 @@ models/
 
 # macOS
 .DS_Store
+
+# Native libraries
+*.dylib
