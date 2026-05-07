@@ -12,6 +12,7 @@ optuna>=3.6.0
 # Narrative / LLM
 ollama>=0.2.0
 requests>=2.31.0
+openai-whisper>=20231117    # local speech-to-text for audio feedback (requires: brew install ffmpeg)
 
 # Frontend
 streamlit>=1.35.0
