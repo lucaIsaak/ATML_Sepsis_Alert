@@ -21,7 +21,7 @@ This output is therefore NOT subject to:
 
 PURPOSE
 =======
-Generates 200 synthetic ICU patients and trains a demo model so the
+Generates 5000 synthetic ICU patients and trains a demo model so the
 Streamlit dashboard works immediately without MIMIC-IV credentials.
 
 Usage:
@@ -29,7 +29,7 @@ Usage:
     streamlit run src/app/dashboard.py
 
 What this creates (all gitignored — no real patient data):
-    data/processed/cohort.parquet    ← 200 synthetic ICU stays
+    data/processed/cohort.parquet    ← 5000 synthetic ICU stays
     data/processed/features.parquet  ← feature matrix (same schema as real)
     models/sepsis_model.pkl       ← demo model trained on synthetic data
 """
@@ -48,7 +48,7 @@ from sklearn.ensemble import HistGradientBoostingClassifier
 # ------------------------------------------------------------------ #
 
 RNG = np.random.default_rng(42)
-N = 200          # number of synthetic patients
+N = 5000          # number of synthetic patients
 SEPSIS_RATE = 0.22
 
 CARE_UNITS = [
@@ -162,7 +162,7 @@ def train_demo_model(features: pd.DataFrame) -> dict:
     model = HistGradientBoostingClassifier(
         max_leaf_nodes=31,
         learning_rate=0.05,
-        max_iter=200,
+        max_iter=500,
         class_weight="balanced",
         random_state=42,
     )
