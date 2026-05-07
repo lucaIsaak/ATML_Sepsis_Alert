@@ -5,7 +5,7 @@ Uses sklearn HistGradientBoostingClassifier — same algorithm as LightGBM,
 pure Python, no native library dependencies, natively handles NaN values.
 
 Input:  feature matrix (stay_id + features + sepsis_label)
-Output: trained model saved to models/lgbm_sepsis.pkl
+Output: trained model saved to models/sepsis_model.pkl
 """
 
 from pathlib import Path
