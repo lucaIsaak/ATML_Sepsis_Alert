@@ -54,7 +54,7 @@ class OllamaClient:
             },
         }
         try:
-            response = requests.post(url, json=payload, timeout=90)
+            response = requests.post(url, json=payload, timeout=600)
             response.raise_for_status()
             return response.json()["message"]["content"].strip()
         except requests.exceptions.ConnectionError:

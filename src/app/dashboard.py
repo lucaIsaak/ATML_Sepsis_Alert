@@ -257,10 +257,25 @@ def _render_shap_chart(feature_row, artifact, features_df, risk_score, stay_id):
             st.warning(f"SHAP computation failed: {exc}")
 
 
+def _get_installed_ollama_models() -> list[str]:
+    """Query Ollama API for all installed models. Returns empty list if unavailable."""
+    import requests  # pylint: disable=import-outside-toplevel
+    try:
+        import yaml  # pylint: disable=import-outside-toplevel
+        with open("config.yaml", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+        base_url = cfg["narrative"]["ollama_base_url"]
+        response = requests.get(f"{base_url}/api/tags", timeout=5)
+        if response.status_code == 200:
+            return [m["name"] for m in response.json().get("models", [])]
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+    return []
+
+
 def _render_narrative_panel():
     """Render the LLM narrative generation panel."""
     st.subheader("Clinical Narrative")
-    st.caption("AI-generated explanation for bedside staff (Ollama / mistral:7b)")
 
     explanation = st.session_state.get("current_explanation")
 
@@ -268,19 +283,46 @@ def _render_narrative_panel():
         st.info("SHAP explanation will appear here after loading.")
         return
 
+    # Model selector
+    installed_models = _get_installed_ollama_models()
+    if installed_models:
+        import yaml  # pylint: disable=import-outside-toplevel
+        with open("config.yaml", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+        default_model = cfg["narrative"]["ollama_model"]
+        default_index = installed_models.index(default_model) if default_model in installed_models else 0
+        selected_model = st.selectbox(
+            "Ollama Model",
+            options=installed_models,
+            index=default_index,
+            help="Select which locally installed Ollama model to use for narrative generation.",
+        )
+        st.caption(f"AI-generated explanation for bedside staff (Ollama / {selected_model})")
+    else:
+        selected_model = None
+        st.caption("AI-generated explanation for bedside staff (Ollama)")
+
     if st.button("Generate Narrative", type="primary"):
-        with st.spinner("Generating clinical narrative..."):
-            try:  # pylint: disable=broad-exception-caught
-                client = OllamaClient()
-                if not client.is_available():
-                    st.error("Ollama not running. Start with: `ollama serve`")
-                else:
+        if not installed_models:
+            st.error("Ollama not running. Start with: `ollama serve`")
+        else:
+            with st.spinner(f"Generating narrative with {selected_model}..."):
+                try:  # pylint: disable=broad-exception-caught
+                    import yaml  # pylint: disable=import-outside-toplevel
+                    with open("config.yaml", encoding="utf-8") as f:
+                        cfg = yaml.safe_load(f)
+                    cfg["narrative"]["ollama_model"] = selected_model
+                    client = OllamaClient(cfg)
                     narrative = client.generate_alert(explanation)
                     st.session_state["narrative"] = narrative
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                st.error(f"Narrative error: {exc}")
+                    st.session_state["narrative_model"] = selected_model
+                except Exception as exc:  # pylint: disable=broad-exception-caught
+                    st.error(f"Narrative error: {exc}")
 
     if "narrative" in st.session_state:
+        model_used = st.session_state.get("narrative_model", "")
+        if model_used:
+            st.caption(f"Generated with: {model_used}")
         st.info(st.session_state["narrative"])
 
     with st.expander("View raw SHAP summary sent to LLM"):
