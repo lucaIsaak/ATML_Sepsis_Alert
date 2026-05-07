@@ -434,73 +434,88 @@ def _render_narrative_panel(stay_id):
         if not installed_models:
             st.error("Ollama not running. Start with: `ollama serve`")
         else:
-            with st.spinner(f"Generating with {selected_model}..."):
-                try:  # pylint: disable=broad-exception-caught
-                    import yaml  # pylint: disable=import-outside-toplevel
-                    with open("config.yaml", encoding="utf-8") as f:
-                        cfg = yaml.safe_load(f)
-                    cfg["narrative"]["ollama_model"] = selected_model
+            try:  # pylint: disable=broad-exception-caught
+                import yaml  # pylint: disable=import-outside-toplevel
+                with open("config.yaml", encoding="utf-8") as f:
+                    cfg = yaml.safe_load(f)
+                cfg["narrative"]["ollama_model"] = selected_model
 
-                    # Build patient context from two complementary sources:
-                    #   Option 1 — Few-shot: highest-rated examples (style anchor)
-                    #   Option 4 — RAG: most clinically similar patient (content anchor)
-                    current_vec = {
-                        f["label"]: f["shap"]
-                        for f in explanation.top_features
-                    }
+                # Build patient context from two complementary sources:
+                #   Option 1 — Few-shot: highest-rated examples (style anchor)
+                #   Option 4 — RAG: most clinically similar patient (content anchor)
+                current_vec = {
+                    f["label"]: f["shap"]
+                    for f in explanation.top_features
+                }
 
-                    context_parts = []
+                context_parts = []
 
-                    # Option 1 — Few-shot: top-rated examples regardless of similarity
-                    few_shot = load_few_shot_examples(
-                        min_rating=4,
-                        max_examples=2,
-                        model_used=selected_model,
+                # Option 1 — Few-shot: top-rated examples regardless of similarity
+                few_shot = load_few_shot_examples(
+                    min_rating=4,
+                    max_examples=2,
+                    model_used=selected_model,
+                )
+                if few_shot:
+                    fs_text = "\n\n".join(
+                        f"[Example rated {ex['rating']}/5]\n{ex['narrative_text']}"
+                        for ex in few_shot
                     )
-                    if few_shot:
-                        fs_text = "\n\n".join(
-                            f"[Example rated {ex['rating']}/5]\n{ex['narrative_text']}"
-                            for ex in few_shot
-                        )
-                        context_parts.append(
-                            "Use the style and structure of these highly-rated "
-                            "past narratives as a reference:\n\n" + fs_text
-                        )
-
-                    # Option 4 — RAG: most clinically similar patient
-                    similar = find_similar_narratives(
-                        current_shap_vector=current_vec,
-                        top_n=1,
-                        min_rating=4,
-                        model_used=selected_model,
+                    context_parts.append(
+                        "Use the style and structure of these highly-rated "
+                        "past narratives as a reference:\n\n" + fs_text
                     )
-                    if similar:
-                        ex = similar[0]
-                        context_parts.append(
-                            f"[Most clinically similar past patient — "
-                            f"rated {ex['rating']}/5, "
-                            f"SHAP similarity {ex['similarity']:.2f}]\n\n"
-                            f"{ex['narrative_text']}\n\n"
-                            "Use a similar level of clinical detail for the "
-                            "current patient, but based only on their values."
-                        )
 
-                    patient_context = "\n\n---\n\n".join(context_parts)
+                # Option 4 — RAG: most clinically similar patient
+                similar = find_similar_narratives(
+                    current_shap_vector=current_vec,
+                    top_n=1,
+                    min_rating=4,
+                    model_used=selected_model,
+                )
+                if similar:
+                    ex = similar[0]
+                    context_parts.append(
+                        f"[Most clinically similar past patient — "
+                        f"rated {ex['rating']}/5, "
+                        f"SHAP similarity {ex['similarity']:.2f}]\n\n"
+                        f"{ex['narrative_text']}\n\n"
+                        "Use a similar level of clinical detail for the "
+                        "current patient, but based only on their values."
+                    )
 
-                    client = OllamaClient(cfg)
-                    narrative = client.generate_alert(explanation, patient_context)
-                    st.session_state["narrative"] = narrative
-                    st.session_state["narrative_model"] = selected_model
-                except Exception as exc:  # pylint: disable=broad-exception-caught
-                    st.error(f"Narrative error: {exc}")
+                patient_context = "\n\n---\n\n".join(context_parts)
 
-    if "narrative" in st.session_state:
+                client = OllamaClient(cfg)
+
+                # Stream the narrative token-by-token (typewriter effect).
+                # st.write_stream() feeds the generator chunk-by-chunk into the UI
+                # and returns the fully-assembled string when done.
+                st.caption(f"Generated with: {selected_model}")
+                with st.container(border=True):
+                    full_narrative = st.write_stream(
+                        client.stream_alert(explanation, patient_context)
+                    )
+                st.session_state["narrative"] = full_narrative
+                st.session_state["narrative_model"] = selected_model
+
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                st.error(f"Narrative error: {exc}")
+
+    elif "narrative" in st.session_state:
+        # Subsequent renders — show stored narrative without re-streaming
         model_used = st.session_state.get("narrative_model", "")
         if model_used:
             st.caption(f"Generated with: {model_used}")
-        st.info(st.session_state["narrative"])
+        with st.container(border=True):
+            st.markdown(st.session_state["narrative"])
 
-        # ── Narrative quality feedback ──────────────────────────
+    # ── Narrative quality feedback ─────────────────────────────────────
+    # Rendered whenever a narrative exists — whether freshly streamed or
+    # loaded from session state on a subsequent render.
+    if "narrative" in st.session_state:
+        model_used = st.session_state.get("narrative_model", "")
+
         st.divider()
         st.caption("**How useful was this narrative?**")
 
