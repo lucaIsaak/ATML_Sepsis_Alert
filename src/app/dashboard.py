@@ -31,6 +31,7 @@ from src.explainability.shap_explainer import explain_patient, format_for_narrat
 from src.model.evaluate import news2_score  # noqa: E402
 from src.model.predict import predict_batch  # noqa: E402
 from src.narrative.ollama_client import OllamaClient  # noqa: E402
+from src.narrative.transcribe import transcribe_audio, is_whisper_available  # noqa: E402
 # pylint: enable=wrong-import-position
 
 st.set_page_config(
@@ -145,8 +146,8 @@ def render_live_monitor(predictions, cohort):
         st.error("No predictions available. Run `python run_pipeline.py` first.")
         return
 
-    # Simulate "active" patients — sample 100 for demo
-    demo = predictions.sample(100, random_state=99).copy()
+    # Already sampled to 100 active patients in main()
+    demo = predictions.copy()
     cohort_cols = [c for c in ["stay_id", "first_careunit", "age", "gender", "intime"]
                    if c in cohort.columns]
     demo = demo.merge(cohort[cohort_cols], on="stay_id", how="left")
@@ -407,13 +408,41 @@ def _render_narrative_panel(stay_id):
 
         rating = st.feedback("stars", key=f"narrative_rating_{stay_id}")
 
+        # Pre-fill correction box with audio transcription if available
+        prefill_key = f"correction_prefill_{stay_id}"
+        prefill = st.session_state.get(prefill_key, "")
+
         correction = st.text_area(
             "What was wrong or missing? (optional)",
+            value=prefill,
             placeholder="e.g. lactate trend was misinterpreted, severity overstated…",
             height=80,
             key=f"narrative_correction_{stay_id}",
             label_visibility="visible",
         )
+
+        # ── Audio feedback ──────────────────────────────────────
+        if is_whisper_available():
+            st.caption("🎙️ Or record your feedback:")
+            audio = st.audio_input(
+                "Record",
+                key=f"audio_feedback_{stay_id}",
+                label_visibility="collapsed",
+            )
+            if audio is not None:
+                with st.spinner("Transcribing audio…"):
+                    transcription = transcribe_audio(audio)
+                if transcription.startswith("[Error]"):
+                    st.warning(transcription)
+                else:
+                    st.session_state[prefill_key] = transcription
+                    st.toast("Audio transcribed — review and submit below.", icon="🎙️")
+                    st.rerun()
+        else:
+            st.caption(
+                "🎙️ Audio feedback unavailable — "
+                "run `pip install openai-whisper && brew install ffmpeg` to enable."
+            )
 
         if st.button("Submit feedback", key=f"submit_nfb_{stay_id}"):
             if rating is None:
@@ -434,6 +463,8 @@ def _render_narrative_panel(stay_id):
                     model_used=model_used or "",
                     shap_vector=shap_vec,
                 )
+                # Clear the audio prefill after successful submission
+                st.session_state.pop(prefill_key, None)
                 st.toast(f"Feedback saved — thank you! ({score}/5 ⭐)", icon="✅")
 
     with st.expander("View raw SHAP summary sent to LLM"):
@@ -647,10 +678,16 @@ def main():
                 predictions["sepsis_label"] = predictions["_label"]
             predictions = predictions.drop(columns=["_label"], errors="ignore")
 
-    page = render_sidebar(predictions)
+    # Sample the 100 "active" patients once here so sidebar and
+    # Live Monitor always show the same counts.
+    active_patients = None
+    if predictions is not None:
+        active_patients = predictions.sample(100, random_state=99).copy()
+
+    page = render_sidebar(active_patients)
 
     if page == "Live Monitor":
-        render_live_monitor(predictions, cohort)
+        render_live_monitor(active_patients, cohort)
     elif page == "Patient Detail":
         render_patient_detail(predictions, cohort, artifact, features_df)
     elif page == "Model Performance":
