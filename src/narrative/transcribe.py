@@ -24,48 +24,94 @@ import tempfile
 from pathlib import Path
 
 
+TRANSCRIPTION_TIMEOUT = 60   # seconds — fail fast rather than hang forever
+
+
 def transcribe_audio(audio_file, model_size: str | None = None) -> str:
     """
     Transcribe an audio recording to text using local Whisper.
 
+    Runs in a background thread with a hard timeout so the dashboard
+    never hangs indefinitely.
+
     Parameters
     ----------
     audio_file  : file-like object returned by st.audio_input
-                  (has a .read() method returning raw bytes)
-    model_size  : whisper model to use — "tiny" | "base" | "small"
-                  Defaults to WHISPER_MODEL env var, then "tiny"
+    model_size  : "tiny" | "base" | "small"  (default: "tiny")
 
     Returns
     -------
-    Transcribed text string, or an error message prefixed with "[Error]"
-    if transcription fails.
+    Transcribed text, or "[Error] ..." message on failure.
     """
     try:
         import whisper  # pylint: disable=import-outside-toplevel
     except ImportError:
+        return "[Error] openai-whisper not installed — run: pip install openai-whisper"
+
+    # Check ffmpeg is available — whisper hangs silently without it
+    if not _ffmpeg_available():
         return (
-            "[Error] openai-whisper is not installed.\n"
-            "Run: pip install openai-whisper"
+            "[Error] ffmpeg not found — required for audio decoding.\n"
+            "Install with: brew install ffmpeg"
         )
 
     size = model_size or os.getenv("WHISPER_MODEL", "tiny")
-
-    # Write audio bytes to a temp file — whisper needs a file path
     suffix = _detect_suffix(audio_file)
-    tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
-    try:
-        tmp.write(audio_file.read())
-        tmp.flush()
-        tmp.close()
+    audio_bytes = audio_file.read()
 
-        model = _load_model(size)
-        result = model.transcribe(tmp.name, fp16=False)
-        return result["text"].strip()
+    def _run() -> str:
+        # Write original audio to temp file
+        tmp_in = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+        tmp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        try:
+            tmp_in.write(audio_bytes)
+            tmp_in.flush()
+            tmp_in.close()
+            tmp_wav.close()
 
-    except Exception as exc:  # pylint: disable=broad-exception-caught
-        return f"[Error] Transcription failed: {exc}"
-    finally:
-        Path(tmp.name).unlink(missing_ok=True)
+            # Force-convert to 16kHz mono WAV via ffmpeg.
+            # This normalises whatever format the browser produced
+            # (WebM, OGG, MP4) into a format whisper handles reliably.
+            import subprocess  # pylint: disable=import-outside-toplevel
+            subprocess.run(
+                [
+                    "ffmpeg", "-y",
+                    "-i", tmp_in.name,
+                    "-ar", "16000",   # 16 kHz sample rate (whisper default)
+                    "-ac", "1",       # mono
+                    "-f", "wav",
+                    tmp_wav.name,
+                ],
+                capture_output=True,
+                check=True,
+            )
+
+            model = _load_model(size)
+            result = model.transcribe(tmp_wav.name, fp16=False)
+            return result["text"].strip()
+        finally:
+            Path(tmp_in.name).unlink(missing_ok=True)
+            Path(tmp_wav.name).unlink(missing_ok=True)
+
+    # Run with timeout so dashboard never hangs forever
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout  # pylint: disable=import-outside-toplevel
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(_run)
+        try:
+            return future.result(timeout=TRANSCRIPTION_TIMEOUT)
+        except FuturesTimeout:
+            return (
+                f"[Error] Transcription timed out after {TRANSCRIPTION_TIMEOUT}s. "
+                "Try a shorter recording, or switch to the text field."
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            return f"[Error] Transcription failed: {exc}"
+
+
+def _ffmpeg_available() -> bool:
+    """Return True if ffmpeg is on PATH."""
+    import shutil  # pylint: disable=import-outside-toplevel
+    return shutil.which("ffmpeg") is not None
 
 
 def _detect_suffix(audio_file) -> str:
