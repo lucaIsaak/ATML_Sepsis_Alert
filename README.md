@@ -142,6 +142,69 @@ See `MODEL_CARD.md` for full model documentation.
 
 ---
 
+## Clinician Feedback Loop
+
+SepsisAlert includes a lightweight active-learning loop that lets clinicians label patients directly from the dashboard and feed those labels back into the next model training cycle.
+
+### How it works
+
+**1. Labelling in the dashboard**
+
+On the Patient Detail page, two buttons appear above the risk gauge for every patient:
+
+| Button | Meaning | Stored as |
+|---|---|---|
+| ✅ Confirm Sepsis | Clinician verifies this patient did develop sepsis | `confirmed_sepsis` |
+| 🚩 Flag as Wrong | Alert fired but clinician believes it was a false positive | `flagged_wrong` |
+
+Labels are saved immediately to `data/feedback/feedback.csv` (gitignored). A clinician can always click again to update a previous decision — each patient has exactly one label at any time.
+
+**Why no "Rule Out Sepsis" button?** Because absence of a diagnosis does not equal absence of disease — the patient may have developed sepsis after discharge, or the alert may have prompted early intervention that prevented it. Only `confirmed_sepsis` is a clean ground-truth label. `flagged_wrong` is treated as a provisional negative with reduced weight.
+
+**2. Retraining with feedback**
+
+```bash
+# See what would happen without writing any files
+python retrain_with_feedback.py --dry-run
+
+# Retrain — saves new model only if AUROC improves
+python retrain_with_feedback.py
+
+# Force save regardless of AUROC
+python retrain_with_feedback.py --force
+```
+
+The script (`retrain_with_feedback.py`):
+- Loads the original feature matrix and overrides labels for all clinician-labelled patients
+- Applies differential sample weights so clinician labels are trusted more than automated ones:
+
+| Label source | Sample weight | Rationale |
+|---|---|---|
+| Original automated label | 1.0 | Baseline |
+| `confirmed_sepsis` | 3.0 | High-confidence, manually verified |
+| `flagged_wrong` | 0.5 | Provisional — uncertain negative |
+
+- Trains a new model using the same hyperparameters from `config.yaml`
+- Compares old vs. new AUROC on the same validation split
+- Only overwrites `models/sepsis_model.pkl` if the new model is better
+- Always creates a timestamped backup (`models/sepsis_model_backup_<ts>.pkl`) before saving
+
+**3. Feedback data structure**
+
+`data/feedback/feedback.csv`:
+
+| Column | Example | Description |
+|---|---|---|
+| `stay_id` | `30002932` | ICU stay identifier |
+| `feedback_type` | `confirmed_sepsis` | Clinician decision |
+| `risk_score` | `0.914` | Model score at time of labelling |
+| `timestamp` | `2026-05-07T14:32:10` | When the label was given |
+| `low_confidence` | `False` | True for `flagged_wrong` entries |
+
+The feedback CSV is gitignored alongside all other patient data.
+
+---
+
 ## Narrative Layer
 
 - **Primary**: Ollama `mistral:7b` running **locally** — no data leaves the machine
@@ -160,6 +223,7 @@ ATML_Sepsis_Alert/
 │   ├── data/
 │   │   ├── cohort.py           # DuckDB cohort extraction (MIMIC-IV)
 │   │   ├── features.py         # Feature engineering (24h rolling windows + trends)
+│   │   ├── feedback.py         # Clinician feedback store + retraining label bridge
 │   │   ├── patient_buffer.py   # Streaming per-patient rolling buffer
 │   │   └── streaming.py        # MIMIC stream simulator (FHIR-compatible)
 │   ├── model/
@@ -194,6 +258,7 @@ ATML_Sepsis_Alert/
 ├── logs/                       # Audit logs (gitignored)
 ├── setup_demo.py               # One-command demo setup (synthetic data, no MIMIC needed)
 ├── run_pipeline.py             # Full MIMIC-IV pipeline runner
+├── retrain_with_feedback.py    # Feedback-driven retraining (run manually after labelling)
 ├── config.yaml                 # Model + app configuration
 ├── MODEL_CARD.md               # Model documentation (EU AI Act Annex IV)
 ├── TRANSPARENCY_LOG.md         # GenAI tool usage disclosure
