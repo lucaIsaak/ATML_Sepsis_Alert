@@ -128,7 +128,6 @@ def build_features(n: int = N) -> tuple[pd.DataFrame, pd.DataFrame]:  # pylint: 
 
         for name, (mn, sn, ms, ss) in VITAL_PARAMS.items():
             base = _sample(mn, sn, ms, ss, s)
-            # Add small trend to make worsening patients look worse over time
             trend = _sample(0.1, 0.05, 0.4, 0.15, s) if name != "spo2" else _sample(-0.02, 0.01, -0.15, 0.05, s)
             row[f"{name}_mean"]  = base
             row[f"{name}_min"]   = base - abs(_sample(0, sn * 0.3, 0, ss * 0.3, s))
