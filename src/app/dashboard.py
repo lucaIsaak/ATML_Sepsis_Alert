@@ -22,6 +22,11 @@ import plotly.graph_objects as go  # noqa: E402
 import streamlit as st  # noqa: E402
 
 from src.data.feedback import get_feedback_for_patient, save_feedback  # noqa: E402
+from src.data.narrative_feedback import (  # noqa: E402
+    save_narrative_feedback,
+    load_few_shot_examples,
+    find_similar_narratives,
+)
 from src.explainability.shap_explainer import explain_patient, format_for_narrative  # noqa: E402
 from src.model.evaluate import news2_score  # noqa: E402
 from src.model.predict import predict_batch  # noqa: E402
@@ -274,7 +279,7 @@ def _get_installed_ollama_models() -> list[str]:
     return []
 
 
-def _render_narrative_panel():
+def _render_narrative_panel(stay_id):
     """Render the LLM narrative generation panel."""
     st.subheader("Clinical Narrative")
     st.caption("AI-generated explanation for bedside staff")
@@ -336,8 +341,55 @@ def _render_narrative_panel():
                     with open("config.yaml", encoding="utf-8") as f:
                         cfg = yaml.safe_load(f)
                     cfg["narrative"]["ollama_model"] = selected_model
+
+                    # Build patient context from two complementary sources:
+                    #   Option 1 — Few-shot: highest-rated examples (style anchor)
+                    #   Option 4 — RAG: most clinically similar patient (content anchor)
+                    current_vec = {
+                        f["label"]: f["shap"]
+                        for f in explanation.top_features
+                    }
+
+                    context_parts = []
+
+                    # Option 1 — Few-shot: top-rated examples regardless of similarity
+                    few_shot = load_few_shot_examples(
+                        min_rating=4,
+                        max_examples=2,
+                        model_used=selected_model,
+                    )
+                    if few_shot:
+                        fs_text = "\n\n".join(
+                            f"[Example rated {ex['rating']}/5]\n{ex['narrative_text']}"
+                            for ex in few_shot
+                        )
+                        context_parts.append(
+                            "Use the style and structure of these highly-rated "
+                            "past narratives as a reference:\n\n" + fs_text
+                        )
+
+                    # Option 4 — RAG: most clinically similar patient
+                    similar = find_similar_narratives(
+                        current_shap_vector=current_vec,
+                        top_n=1,
+                        min_rating=4,
+                        model_used=selected_model,
+                    )
+                    if similar:
+                        ex = similar[0]
+                        context_parts.append(
+                            f"[Most clinically similar past patient — "
+                            f"rated {ex['rating']}/5, "
+                            f"SHAP similarity {ex['similarity']:.2f}]\n\n"
+                            f"{ex['narrative_text']}\n\n"
+                            "Use a similar level of clinical detail for the "
+                            "current patient, but based only on their values."
+                        )
+
+                    patient_context = "\n\n---\n\n".join(context_parts)
+
                     client = OllamaClient(cfg)
-                    narrative = client.generate_alert(explanation)
+                    narrative = client.generate_alert(explanation, patient_context)
                     st.session_state["narrative"] = narrative
                     st.session_state["narrative_model"] = selected_model
                 except Exception as exc:  # pylint: disable=broad-exception-caught
@@ -348,6 +400,41 @@ def _render_narrative_panel():
         if model_used:
             st.caption(f"Generated with: {model_used}")
         st.info(st.session_state["narrative"])
+
+        # ── Narrative quality feedback ──────────────────────────
+        st.divider()
+        st.caption("**How useful was this narrative?**")
+
+        rating = st.feedback("stars", key=f"narrative_rating_{stay_id}")
+
+        correction = st.text_area(
+            "What was wrong or missing? (optional)",
+            placeholder="e.g. lactate trend was misinterpreted, severity overstated…",
+            height=80,
+            key=f"narrative_correction_{stay_id}",
+            label_visibility="visible",
+        )
+
+        if st.button("Submit feedback", key=f"submit_nfb_{stay_id}"):
+            if rating is None:
+                st.warning("Please select a star rating before submitting.")
+            else:
+                # st.feedback returns 0–4, convert to 1–5
+                score = int(rating) + 1
+                shap_vec = {
+                    f["label"]: f["shap"]
+                    for f in explanation.top_features
+                }
+                save_narrative_feedback(
+                    stay_id=int(stay_id),
+                    rating=score,
+                    correction_note=correction or "",
+                    narrative_text=st.session_state["narrative"],
+                    shap_summary=format_for_narrative(explanation),
+                    model_used=model_used or "",
+                    shap_vector=shap_vec,
+                )
+                st.toast(f"Feedback saved — thank you! ({score}/5 ⭐)", icon="✅")
 
     with st.expander("View raw SHAP summary sent to LLM"):
         st.code(format_for_narrative(explanation))
@@ -443,7 +530,7 @@ def render_patient_detail(  # pylint: disable=too-many-locals
         _render_shap_chart(feature_row, artifact, features_df, risk_score, stay_id)
 
     with col_narr:
-        _render_narrative_panel()
+        _render_narrative_panel(stay_id)
 
     st.divider()
 
