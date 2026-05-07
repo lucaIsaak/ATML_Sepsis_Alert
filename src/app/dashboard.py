@@ -228,40 +228,50 @@ def _render_shap_chart(feature_row, artifact, features_df, risk_score, stay_id):
         st.info("No feature data for this patient.")
         return
 
-    with st.spinner("Computing SHAP explanation..."):
-        try:  # pylint: disable=broad-exception-caught
-            explainer = load_explainer(artifact, features_df)
-            feature_cols = artifact["feature_cols"]
-            fv = feature_row[feature_cols].values[0]
-            explanation = explain_patient(
-                explainer, fv, feature_cols, risk_score, stay_id, top_n=8
-            )
+    # Cache SHAP explanation per patient in session state so reruns
+    # (e.g. after audio transcription) never recompute it from scratch.
+    shap_cache_key = f"shap_explanation_{stay_id}"
 
-            # Horizontal bar chart
-            labels = [f["label"] for f in explanation.top_features]
-            shap_vals = [f["shap"] for f in explanation.top_features]
-            colors = [risk_color("HIGH") if v > 0 else "#27ae60" for v in shap_vals]
+    if shap_cache_key not in st.session_state:
+        with st.spinner("Computing SHAP explanation..."):
+            try:  # pylint: disable=broad-exception-caught
+                explainer = load_explainer(artifact, features_df)
+                feature_cols = artifact["feature_cols"]
+                fv = feature_row[feature_cols].values[0]
+                explanation = explain_patient(
+                    explainer, fv, feature_cols, risk_score, stay_id, top_n=8
+                )
+                st.session_state[shap_cache_key] = explanation
+                st.session_state["current_explanation"] = explanation
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                st.warning(f"SHAP computation failed: {exc}")
+                return
+    else:
+        # Already computed — load from cache instantly
+        explanation = st.session_state[shap_cache_key]
+        st.session_state["current_explanation"] = explanation
 
-            fig = go.Figure(go.Bar(
-                x=shap_vals,
-                y=labels,
-                orientation="h",
-                marker_color=colors,
-                text=[f"{v:+.3f}" for v in shap_vals],
-                textposition="outside",
-            ))
-            fig.update_layout(
-                xaxis_title="SHAP value (contribution to risk)",
-                height=350,
-                margin={"t": 10, "b": 10},
-                plot_bgcolor="rgba(0,0,0,0)",
-                xaxis={"zeroline": True, "zerolinecolor": "black", "zerolinewidth": 1},
-            )
-            st.plotly_chart(fig, use_container_width=True)
-            st.session_state["current_explanation"] = explanation
+    # Render chart from explanation (always fast — no recomputation)
+    labels = [f["label"] for f in explanation.top_features]
+    shap_vals = [f["shap"] for f in explanation.top_features]
+    colors = [risk_color("HIGH") if v > 0 else "#27ae60" for v in shap_vals]
 
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            st.warning(f"SHAP computation failed: {exc}")
+    fig = go.Figure(go.Bar(
+        x=shap_vals,
+        y=labels,
+        orientation="h",
+        marker_color=colors,
+        text=[f"{v:+.3f}" for v in shap_vals],
+        textposition="outside",
+    ))
+    fig.update_layout(
+        xaxis_title="SHAP value (contribution to risk)",
+        height=350,
+        margin={"t": 10, "b": 10},
+        plot_bgcolor="rgba(0,0,0,0)",
+        xaxis={"zeroline": True, "zerolinecolor": "black", "zerolinewidth": 1},
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
 
 def _get_installed_ollama_models() -> list[str]:
@@ -408,20 +418,10 @@ def _render_narrative_panel(stay_id):
 
         rating = st.feedback("stars", key=f"narrative_rating_{stay_id}")
 
-        # Pre-fill correction box with audio transcription if available
-        prefill_key = f"correction_prefill_{stay_id}"
-        prefill = st.session_state.get(prefill_key, "")
+        # Text area key — also used to inject audio transcription
+        correction_key = f"narrative_correction_{stay_id}"
 
-        correction = st.text_area(
-            "What was wrong or missing? (optional)",
-            value=prefill,
-            placeholder="e.g. lactate trend was misinterpreted, severity overstated…",
-            height=80,
-            key=f"narrative_correction_{stay_id}",
-            label_visibility="visible",
-        )
-
-        # ── Audio feedback ──────────────────────────────────────
+        # ── Audio feedback (sits ABOVE text area so flow is natural) ──
         if is_whisper_available():
             st.caption("🎙️ Or record your feedback:")
             audio = st.audio_input(
@@ -430,19 +430,35 @@ def _render_narrative_panel(stay_id):
                 label_visibility="collapsed",
             )
             if audio is not None:
-                with st.spinner("Transcribing audio…"):
-                    transcription = transcribe_audio(audio)
-                if transcription.startswith("[Error]"):
-                    st.warning(transcription)
-                else:
-                    st.session_state[prefill_key] = transcription
-                    st.toast("Audio transcribed — review and submit below.", icon="🎙️")
-                    st.rerun()
+                import hashlib  # pylint: disable=import-outside-toplevel
+                audio_bytes = audio.read()
+                audio_hash  = hashlib.md5(audio_bytes).hexdigest()
+                processed_key = f"audio_processed_{stay_id}"
+
+                # Only transcribe if this is a NEW recording we haven't seen yet
+                if st.session_state.get(processed_key) != audio_hash:
+                    with st.spinner("Transcribing audio…"):
+                        import io  # pylint: disable=import-outside-toplevel
+                        transcription = transcribe_audio(io.BytesIO(audio_bytes))
+                    if transcription.startswith("[Error]"):
+                        st.warning(transcription)
+                    else:
+                        st.session_state[correction_key] = transcription
+                        st.session_state[processed_key]  = audio_hash
+                        st.toast("Audio transcribed — review and submit below.", icon="🎙️")
+                        st.rerun()
         else:
             st.caption(
                 "🎙️ Audio feedback unavailable — "
                 "run `pip install openai-whisper && brew install ffmpeg` to enable."
             )
+
+        correction = st.text_area(
+            "What was wrong or missing? (optional)",
+            placeholder="e.g. lactate trend was misinterpreted, severity overstated…",
+            height=80,
+            key=correction_key,
+        )
 
         if st.button("Submit feedback", key=f"submit_nfb_{stay_id}"):
             if rating is None:
@@ -463,8 +479,6 @@ def _render_narrative_panel(stay_id):
                     model_used=model_used or "",
                     shap_vector=shap_vec,
                 )
-                # Clear the audio prefill after successful submission
-                st.session_state.pop(prefill_key, None)
                 st.toast(f"Feedback saved — thank you! ({score}/5 ⭐)", icon="✅")
 
     with st.expander("View raw SHAP summary sent to LLM"):
