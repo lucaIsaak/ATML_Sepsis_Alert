@@ -139,8 +139,8 @@ def render_live_monitor(predictions, cohort):
         st.error("No predictions available. Run `python run_pipeline.py` first.")
         return
 
-    # Simulate "active" patients — sample 50 for demo
-    demo = predictions.sample(50, random_state=99).copy()
+    # Simulate "active" patients — sample 100 for demo
+    demo = predictions.sample(100, random_state=99).copy()
     cohort_cols = [c for c in ["stay_id", "first_careunit", "age", "gender", "intime"]
                    if c in cohort.columns]
     demo = demo.merge(cohort[cohort_cols], on="stay_id", how="left")
@@ -276,6 +276,7 @@ def _get_installed_ollama_models() -> list[str]:
 def _render_narrative_panel():
     """Render the LLM narrative generation panel."""
     st.subheader("Clinical Narrative")
+    st.caption("AI-generated explanation for bedside staff")
 
     explanation = st.session_state.get("current_explanation")
 
@@ -283,30 +284,52 @@ def _render_narrative_panel():
         st.info("SHAP explanation will appear here after loading.")
         return
 
-    # Model selector
     installed_models = _get_installed_ollama_models()
-    if installed_models:
-        import yaml  # pylint: disable=import-outside-toplevel
-        with open("config.yaml", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f)
-        default_model = cfg["narrative"]["ollama_model"]
-        default_index = installed_models.index(default_model) if default_model in installed_models else 0
-        selected_model = st.selectbox(
-            "Ollama Model",
-            options=installed_models,
-            index=default_index,
-            help="Select which locally installed Ollama model to use for narrative generation.",
-        )
-        st.caption(f"AI-generated explanation for bedside staff (Ollama / {selected_model})")
-    else:
-        selected_model = None
-        st.caption("AI-generated explanation for bedside staff (Ollama)")
 
-    if st.button("Generate Narrative", type="primary"):
+    st.markdown("""
+        <style>
+        .narrative-row { display: flex; align-items: center; gap: 12px; }
+        .narrative-row select {
+            border: 2px solid #ff4b4b;
+            color: #ff4b4b;
+            background: white;
+            border-radius: 8px;
+            padding: 6px 12px;
+            font-size: 14px;
+            cursor: pointer;
+            outline: none;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
+    col_btn, col_model, col_rest = st.columns([3, 2, 3])
+
+    with col_btn:
+        generate = st.button("Generate Narrative", type="primary", use_container_width=True)
+
+    with col_model:
+        if installed_models:
+            import yaml  # pylint: disable=import-outside-toplevel
+            with open("config.yaml", encoding="utf-8") as f:
+                cfg = yaml.safe_load(f)
+            default_model = cfg["narrative"]["ollama_model"]
+            default_index = installed_models.index(default_model) if default_model in installed_models else 0
+            selected_model = st.selectbox(
+                "Model",
+                options=installed_models,
+                index=default_index,
+                label_visibility="collapsed",
+                help="Select which locally installed Ollama model to use.",
+            )
+        else:
+            selected_model = None
+            st.error("Ollama not running. Start with: `ollama serve`")
+
+    if generate:
         if not installed_models:
             st.error("Ollama not running. Start with: `ollama serve`")
         else:
-            with st.spinner(f"Generating narrative with {selected_model}..."):
+            with st.spinner(f"Generating with {selected_model}..."):
                 try:  # pylint: disable=broad-exception-caught
                     import yaml  # pylint: disable=import-outside-toplevel
                     with open("config.yaml", encoding="utf-8") as f:
