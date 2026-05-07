@@ -65,6 +65,49 @@ class OllamaClient:
         except requests.exceptions.RequestException as exc:
             return f"Narrative error: {exc}"
 
+    def _stream_chat(self, system: str, user: str):
+        """
+        Stream a chat response from Ollama, yielding text chunks as they arrive.
+
+        Uses Ollama's streaming API (stream=True) so the caller receives tokens
+        incrementally — ideal for Streamlit's st.write_stream().
+        """
+        import json  # pylint: disable=import-outside-toplevel
+
+        url = f"{self.base_url}/api/chat"
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "stream": True,
+            "options": {
+                "num_predict": self.max_tokens,
+                "temperature": 0.2,
+                "top_p": 0.9,
+            },
+        }
+        try:
+            with requests.post(url, json=payload, stream=True, timeout=600) as response:
+                response.raise_for_status()
+                for raw_line in response.iter_lines():
+                    if not raw_line:
+                        continue
+                    data = json.loads(raw_line)
+                    chunk = data.get("message", {}).get("content", "")
+                    if chunk:
+                        yield chunk
+                    if data.get("done", False):
+                        break
+        except requests.exceptions.ConnectionError:
+            yield (
+                "\n\n*Narrative unavailable — Ollama not running.*\n"
+                "Start with: `ollama serve`"
+            )
+        except requests.exceptions.RequestException as exc:
+            yield f"\n\n*Narrative error: {exc}*"
+
     def generate_nurse_alert(
         self,
         explanation: SHAPExplanation,
@@ -99,6 +142,18 @@ class OllamaClient:
     def generate_alert(self, explanation: SHAPExplanation, patient_context: str = "") -> str:
         """Alias for generate_nurse_alert (backward compatibility)."""
         return self.generate_nurse_alert(explanation, patient_context)
+
+    def stream_alert(self, explanation: SHAPExplanation, patient_context: str = ""):
+        """
+        Stream a nurse-facing SBAR alert token by token.
+
+        Yields text chunks as they arrive from Ollama.
+        Pass directly to Streamlit's st.write_stream() for a typewriter effect.
+        """
+        shap_summary = format_for_narrative(explanation)
+        enriched = enrich_shap_summary(shap_summary, explanation.top_features)
+        user_prompt = build_nurse_prompt(enriched, patient_context)
+        yield from self._stream_chat(NURSE_SYSTEM_PROMPT, user_prompt)
 
     def is_available(self) -> bool:
         """Return True if Ollama is running and the configured model is loaded."""
