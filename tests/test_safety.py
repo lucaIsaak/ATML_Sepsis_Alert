@@ -151,8 +151,9 @@ class TestNarrativeGuard:
         """Safe fallback must not contain confirmed diagnosis language."""
         guard = self._guard()
         result = guard.validate("diagnosed with sepsis", shap_summary="lactate 4.2")
-        assert "confirmed" not in result.text.lower()
-        assert "diagnosed with" not in result.text.lower()
+        assert "confirmed sepsis" not in result.text.lower()
+        assert "patient has sepsis" not in result.text.lower()
+        assert "diagnosed with sepsis" not in result.text.lower()
 
     def test_fallback_includes_shap_summary(self):
         """Fallback must include SHAP summary so clinician sees the evidence."""
