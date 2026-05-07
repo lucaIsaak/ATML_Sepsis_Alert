@@ -10,11 +10,11 @@ cohort:
   lookback_window_hours: 24     # feature window size
 
 model:
-  artifact_path: "models/lightgbm_sepsis.pkl"
-  num_leaves: 64
-  learning_rate: 0.05
-  n_estimators: 500
-  min_child_samples: 20
+  artifact_path: "models/sepsis_model.pkl"
+  num_leaves: 31          # Optuna best (trial 47, CV AUROC 0.8297)
+  learning_rate: 0.0163
+  n_estimators: 859
+  min_child_samples: 95
   class_weight: "balanced"
 
 narrative:
