@@ -33,6 +33,7 @@ from src.data.patient_buffer import BufferRegistry, Observation
 from src.explainability.shap_explainer import SHAPExplanation, build_explainer, explain_patient
 from src.model.predict import load_model, predict_patient
 from src.narrative.ollama_client import OllamaClient
+from src.safety.guardrails import AuditLogger, InputGuard, NarrativeGuard
 
 
 # ------------------------------------------------------------------ #
@@ -138,6 +139,11 @@ class PatientMonitorAgent:  # pylint: disable=too-many-instance-attributes
         self.narrative    = OllamaClient(cfg)
         self.registry     = BufferRegistry(window_hours=cfg["cohort"]["lookback_window_hours"])
 
+        # Safety guardrails (Layer 1, 2, 3)
+        self.input_guard     = InputGuard.from_artifact(self.artifact)
+        self.narrative_guard = NarrativeGuard()
+        self.audit_logger    = AuditLogger(log_path="logs/audit.jsonl")
+
         # SHAP explainer (built lazily on first use)
         self._explainer   = None
 
@@ -218,7 +224,7 @@ class PatientMonitorAgent:  # pylint: disable=too-many-instance-attributes
     # ReAct core                                                         #
     # ---------------------------------------------------------------- #
 
-    def _process_patient(
+    def _process_patient(  # pylint: disable=too-many-locals
         self, stay_id: str, features: dict, timestamp: datetime
     ) -> Optional[AlertRecord]:
         """
@@ -229,6 +235,8 @@ class PatientMonitorAgent:  # pylint: disable=too-many-instance-attributes
         mem = self._get_memory(stay_id)
 
         # === OBSERVE ===
+        # Layer 1: check inputs before running the model
+        ood = self.input_guard.check(features)
         prediction = self._tool_run_model(features)
         risk_score = prediction["risk_score"]
 
@@ -245,6 +253,7 @@ class PatientMonitorAgent:  # pylint: disable=too-many-instance-attributes
             return None
 
         # === ACT ===
+        from src.explainability.shap_explainer import format_for_narrative  # pylint: disable=import-outside-toplevel
         explanation = self._tool_explain(
             prediction["feature_vector"],
             prediction["feature_names"],
@@ -254,13 +263,23 @@ class PatientMonitorAgent:  # pylint: disable=too-many-instance-attributes
 
         nurse_narrative = None
         doctor_narrative = None
+        nurse_nar_result = None
         patient_context = self._build_context(stay_id)
 
         if tier >= EscalationTier.NURSE:
-            nurse_narrative = self._tool_nurse_alert(explanation, patient_context)
+            raw_nurse = self._tool_nurse_alert(explanation, patient_context)
+            # Layer 2: validate narrative, replace if unsafe
+            nurse_nar_result = self.narrative_guard.validate(
+                raw_nurse, format_for_narrative(explanation)
+            )
+            nurse_narrative = nurse_nar_result.text
 
         if tier >= EscalationTier.DOCTOR:
-            doctor_narrative = self._tool_doctor_summary(explanation, patient_context)
+            raw_doctor = self._tool_doctor_summary(explanation, patient_context)
+            doctor_result = self.narrative_guard.validate(
+                raw_doctor, format_for_narrative(explanation)
+            )
+            doctor_narrative = doctor_result.text
             mem.last_doctor_notification = timestamp
 
         if tier == EscalationTier.CRITICAL:
@@ -279,6 +298,17 @@ class PatientMonitorAgent:  # pylint: disable=too-many-instance-attributes
             ),
         )
 
+        # Layer 3: audit log every dispatched alert
+        self.audit_logger.log_alert(
+            stay_id=stay_id,
+            risk_score=risk_score,
+            tier=tier.name,
+            top_features=explanation.top_features,
+            ood_result=ood,
+            narrative_result=nurse_nar_result or self.narrative_guard.validate("", ""),
+            timestamp=timestamp,
+        )
+
         # === REMEMBER ===
         mem.alert_history.append(alert)
         self.alert_log.append(alert)
@@ -287,10 +317,11 @@ class PatientMonitorAgent:  # pylint: disable=too-many-instance-attributes
         if tier < EscalationTier.CRITICAL:
             mem.suppress(hours=2.0, now=timestamp)
 
+        ood_flag = f" [{ood.confidence_flag}]" if ood.confidence_flag != "NORMAL" else ""
         print(
             f"[{timestamp.strftime('%H:%M')}] "
             f"Stay {stay_id} | {tier.name} | score={risk_score:.3f} | "
-            f"trend={mem.trend:+.2f}"
+            f"trend={mem.trend:+.2f}{ood_flag}"
         )
 
         return alert
