@@ -21,6 +21,7 @@ import pandas as pd  # noqa: E402
 import plotly.graph_objects as go  # noqa: E402
 import streamlit as st  # noqa: E402
 
+from src.data.feedback import get_feedback_for_patient, save_feedback  # noqa: E402
 from src.explainability.shap_explainer import explain_patient, format_for_narrative  # noqa: E402
 from src.model.evaluate import news2_score  # noqa: E402
 from src.model.predict import predict_batch  # noqa: E402
@@ -390,6 +391,27 @@ def render_patient_detail(  # pylint: disable=too-many-locals
             st.metric("Age", int(cr.get("age", 0)))
             st.metric("Care Unit", str(cr.get("first_careunit", "-"))[:25])
     with col3:
+        # ── Clinician feedback buttons ──────────────────────────
+        existing = get_feedback_for_patient(stay_id_int)
+        if existing:
+            ftype = existing["feedback_type"]
+            if ftype == "confirmed_sepsis":
+                st.success("✅ Labelled: Sepsis Confirmed")
+            else:
+                st.warning("🚩 Labelled: Flagged as Wrong Alert")
+
+        btn_confirm, btn_flag = st.columns(2)
+        with btn_confirm:
+            if st.button("✅ Confirm Sepsis", type="primary", use_container_width=True):
+                save_feedback(stay_id_int, "confirmed_sepsis", risk_score)
+                st.toast("Saved: Sepsis confirmed ✅", icon="✅")
+                st.rerun()
+        with btn_flag:
+            if st.button("🚩 Flag as Wrong", use_container_width=True):
+                save_feedback(stay_id_int, "flagged_wrong", risk_score)
+                st.toast("Saved: Alert flagged as incorrect 🚩", icon="🚩")
+                st.rerun()
+
         # Risk gauge
         fig = go.Figure(go.Indicator(
             mode="gauge+number",
