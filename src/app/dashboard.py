@@ -41,7 +41,7 @@ st.set_page_config(
 @st.cache_resource
 def load_artifact():
     """Load the trained model artifact from disk."""
-    path = Path("models/lightgbm_sepsis.pkl")
+    path = Path("models/sepsis_model.pkl")
     if not path.exists():
         return None
     return joblib.load(path)

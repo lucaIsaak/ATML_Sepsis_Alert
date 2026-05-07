@@ -31,7 +31,7 @@ Usage:
 What this creates (all gitignored — no real patient data):
     data/processed/cohort.parquet    ← 200 synthetic ICU stays
     data/processed/features.parquet  ← feature matrix (same schema as real)
-    models/lightgbm_sepsis.pkl       ← demo model trained on synthetic data
+    models/sepsis_model.pkl       ← demo model trained on synthetic data
 """
 
 from __future__ import annotations
@@ -186,11 +186,11 @@ def write_local(cohort: pd.DataFrame, features: pd.DataFrame, artifact: dict) ->
 
     cohort.to_parquet(proc_dir / "cohort.parquet",     index=False)
     features.to_parquet(proc_dir / "features.parquet", index=False)
-    joblib.dump(artifact, mdl_dir / "lightgbm_sepsis.pkl")
+    joblib.dump(artifact, mdl_dir / "sepsis_model.pkl")
 
     print(f"  cohort.parquet  → {proc_dir / 'cohort.parquet'}")
     print(f"  features.parquet→ {proc_dir / 'features.parquet'}")
-    print(f"  model artifact  → {mdl_dir / 'lightgbm_sepsis.pkl'}")
+    print(f"  model artifact  → {mdl_dir / 'sepsis_model.pkl'}")
 
 
 def main() -> None:

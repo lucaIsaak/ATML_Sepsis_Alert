@@ -16,7 +16,7 @@
 | **Training data** | MIMIC-IV v3.1 ICU cohort |
 | **AUROC (held-out test set)** | 0.895 |
 | **NEWS2 baseline AUROC** | 0.614 |
-| **Artifact path** | `models/lightgbm_sepsis.pkl` |
+| **Artifact path** | `models/sepsis_model.pkl` |
 
 ---
 
