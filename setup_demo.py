@@ -202,8 +202,13 @@ def main() -> None:
           f"({int(N * SEPSIS_RATE)} sepsis)...")
     cohort, features = build_features()
 
-    print("  Training demo model...")
-    artifact = train_demo_model(features)
+    model_path = Path("models/sepsis_model.pkl")
+    if model_path.exists():
+        print(f"  Real model found at {model_path} — skipping demo training.")
+        artifact = joblib.load(model_path)
+    else:
+        print("  No trained model found — training demo model on synthetic data...")
+        artifact = train_demo_model(features)
 
     print("  Writing to local data/ and models/...")
     write_local(cohort, features, artifact)

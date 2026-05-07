@@ -220,7 +220,6 @@ __marimo__/
 # Data
 physionet.org/
 data/
-models/
 
 # Environment
 .venv/
