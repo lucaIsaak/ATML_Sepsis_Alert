@@ -42,6 +42,61 @@ st.set_page_config(
 )
 
 # ------------------------------------------------------------------ #
+# Global theme — Ocean blue (#0284c7) replaces all non-risk reds      #
+# ------------------------------------------------------------------ #
+st.markdown("""
+<style>
+/* Primary buttons */
+div.stButton > button[kind="primary"],
+div.stButton > button[data-testid="baseButton-primary"] {
+    background-color: #0284c7 !important;
+    border-color:     #0284c7 !important;
+    color: white !important;
+}
+div.stButton > button[kind="primary"]:hover,
+div.stButton > button[data-testid="baseButton-primary"]:hover {
+    background-color: #0369a1 !important;
+    border-color:     #0369a1 !important;
+}
+
+/* Secondary / default buttons */
+div.stButton > button:not([kind="primary"]) {
+    border-color: #0284c7 !important;
+    color:        #0284c7 !important;
+}
+div.stButton > button:not([kind="primary"]):hover {
+    background-color: #e0f2fe !important;
+}
+
+/* Sidebar radio / nav active state */
+div[data-testid="stSidebar"] .st-emotion-cache-1rtdyuf,
+div[data-testid="stSidebar"] [aria-selected="true"] {
+    color: #0284c7 !important;
+}
+
+/* st.tabs active underline */
+button[data-baseweb="tab"][aria-selected="true"] {
+    color:        #0284c7 !important;
+    border-color: #0284c7 !important;
+}
+
+/* st.selectbox & st.multiselect focus ring */
+div[data-baseweb="select"] > div:focus-within {
+    border-color: #0284c7 !important;
+    box-shadow: 0 0 0 1px #0284c7 !important;
+}
+
+/* Progress / spinner accent */
+div[data-testid="stProgress"] > div > div > div {
+    background-color: #0284c7 !important;
+}
+
+/* Streamlit link colour */
+a { color: #0284c7 !important; }
+</style>
+""", unsafe_allow_html=True)
+
+# ------------------------------------------------------------------ #
 # Cached loaders                                                       #
 # ------------------------------------------------------------------ #
 
@@ -228,50 +283,83 @@ def _render_shap_chart(feature_row, artifact, features_df, risk_score, stay_id):
         st.info("No feature data for this patient.")
         return
 
-    # Cache SHAP explanation per patient in session state so reruns
-    # (e.g. after audio transcription) never recompute it from scratch.
+    # Cache SHAP explanation per patient — compute ALL features so we
+    # can show both top and bottom contributors without a second call.
     shap_cache_key = f"shap_explanation_{stay_id}"
 
     if shap_cache_key not in st.session_state:
         with st.spinner("Computing SHAP explanation..."):
             try:  # pylint: disable=broad-exception-caught
-                explainer = load_explainer(artifact, features_df)
+                explainer    = load_explainer(artifact, features_df)
                 feature_cols = artifact["feature_cols"]
-                fv = feature_row[feature_cols].values[0]
-                explanation = explain_patient(
-                    explainer, fv, feature_cols, risk_score, stay_id, top_n=8
+                fv           = feature_row[feature_cols].values[0]
+                # top_n = total features → get every SHAP value
+                explanation  = explain_patient(
+                    explainer, fv, feature_cols, risk_score, stay_id,
+                    top_n=len(feature_cols),
                 )
-                st.session_state[shap_cache_key] = explanation
+                st.session_state[shap_cache_key]      = explanation
                 st.session_state["current_explanation"] = explanation
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 st.warning(f"SHAP computation failed: {exc}")
                 return
     else:
-        # Already computed — load from cache instantly
         explanation = st.session_state[shap_cache_key]
         st.session_state["current_explanation"] = explanation
 
-    # Render chart from explanation (always fast — no recomputation)
-    labels = [f["label"] for f in explanation.top_features]
-    shap_vals = [f["shap"] for f in explanation.top_features]
-    colors = [risk_color("HIGH") if v > 0 else "#27ae60" for v in shap_vals]
+    all_features = explanation.top_features   # sorted high→low by |shap|
 
-    fig = go.Figure(go.Bar(
-        x=shap_vals,
-        y=labels,
-        orientation="h",
-        marker_color=colors,
-        text=[f"{v:+.3f}" for v in shap_vals],
-        textposition="outside",
-    ))
-    fig.update_layout(
-        xaxis_title="SHAP value (contribution to risk)",
-        height=350,
-        margin={"t": 10, "b": 10},
-        plot_bgcolor="rgba(0,0,0,0)",
-        xaxis={"zeroline": True, "zerolinecolor": "black", "zerolinewidth": 1},
-    )
-    st.plotly_chart(fig, use_container_width=True)
+    # Top 8 most responsible (highest |shap|) — already first in list
+    top8  = all_features[:8]
+    # Bottom 8 least responsible (lowest |shap|) — last in list, reversed
+    # so the smallest bar is at the bottom of the chart
+    bottom8 = list(reversed(all_features[-8:]))
+
+    # ── Colour palette ──────────────────────────────────────────
+    BLUE_PRIMARY = "#0284c7"   # Ocean blue for top contributors
+    BLUE_LIGHT   = "#7EC8E3"   # pale Ocean for least responsible
+
+    def _make_bar(features, color, title):
+        labels    = [f["label"] for f in features]
+        shap_vals = [f["shap"]  for f in features]
+        fig = go.Figure(go.Bar(
+            x=shap_vals,
+            y=labels,
+            orientation="h",
+            marker_color=color,
+            text=[f"{v:+.4f}" for v in shap_vals],
+            textposition="outside",
+        ))
+        fig.update_layout(
+            xaxis_title="SHAP value (contribution to risk)",
+            title=dict(text=title, font=dict(size=13, color="#374151")),
+            height=320,
+            margin={"t": 40, "b": 10, "l": 10, "r": 60},
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+            xaxis={
+                "zeroline": True,
+                "zerolinecolor": "#d1d5db",
+                "zerolinewidth": 2,
+                "gridcolor": "#f3f4f6",
+            },
+            font=dict(family="Inter, sans-serif", color="#374151", size=12),
+        )
+        return fig
+
+    tab_top, tab_bottom = st.tabs(["🔺 Most Responsible", "🔹 Least Responsible"])
+
+    with tab_top:
+        st.plotly_chart(
+            _make_bar(top8, BLUE_PRIMARY, "Top 8 features driving this risk score"),
+            use_container_width=True,
+        )
+
+    with tab_bottom:
+        st.plotly_chart(
+            _make_bar(bottom8, BLUE_LIGHT, "Bottom 8 features — minimal impact on risk"),
+            use_container_width=True,
+        )
 
 
 def _get_installed_ollama_models() -> list[str]:
@@ -307,8 +395,8 @@ def _render_narrative_panel(stay_id):
         <style>
         .narrative-row { display: flex; align-items: center; gap: 12px; }
         .narrative-row select {
-            border: 2px solid #ff4b4b;
-            color: #ff4b4b;
+            border: 2px solid #0284c7;
+            color: #0284c7;
             background: white;
             border-radius: 8px;
             padding: 6px 12px;
@@ -544,20 +632,20 @@ def render_patient_detail(  # pylint: disable=too-many-locals
                 st.toast("Saved: Alert flagged as incorrect 🚩", icon="🚩")
                 st.rerun()
 
-        # Risk gauge
+        # Risk gauge — bar always Ocean blue; background zones show risk regions
         fig = go.Figure(go.Indicator(
             mode="gauge+number",
             value=risk_score * 100,
             number={"suffix": "%", "font": {"size": 32}},
             gauge={
                 "axis": {"range": [0, 100]},
-                "bar": {"color": risk_color(risk_label)},
+                "bar": {"color": "#0284c7"},
                 "steps": [
-                    {"range": [0, 40], "color": "#d5f5e3"},
+                    {"range": [0, 40],  "color": "#d5f5e3"},
                     {"range": [40, 60], "color": "#fef9e7"},
-                    {"range": [60, 100], "color": "#fde8e8"},
+                    {"range": [60, 100], "color": "#e8f4fd"},
                 ],
-                "threshold": {"line": {"color": "red", "width": 4}, "value": 60},
+                "threshold": {"line": {"color": "#64748b", "width": 4}, "value": 60},
             },
             title={"text": "Sepsis Risk"},
         ))
@@ -621,9 +709,9 @@ def render_model_performance(predictions):  # pylint: disable=too-many-locals
 
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(x=fpr, y=tpr, name="SepsisAlert (0.895)",
-                                         line={"color": "#2980b9", "width": 2}))
+                                         line={"color": "#0284c7", "width": 2}))
                 fig.add_trace(go.Scatter(x=fpr2, y=tpr2, name="NEWS2 (0.614)",
-                                         line={"color": "#e74c3c", "width": 2, "dash": "dash"}))
+                                         line={"color": "#94a3b8", "width": 2, "dash": "dash"}))
                 fig.add_trace(go.Scatter(x=[0, 1], y=[0, 1], name="Random",
                                          line={"color": "gray", "dash": "dot"}))
                 fig.update_layout(
@@ -640,7 +728,7 @@ def render_model_performance(predictions):  # pylint: disable=too-many-locals
         fig = go.Figure(go.Bar(
             x=["SepsisAlert\n(This work)", "NEWS2\n(Clinical standard)"],
             y=[0.895, 0.614],
-            marker_color=["#2980b9", "#e74c3c"],
+            marker_color=["#0284c7", "#94a3b8"],
             text=["0.895", "0.614"],
             textposition="outside",
         ))
