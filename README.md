@@ -319,6 +319,26 @@ streamlit run src/app/dashboard.py
 
 `setup_demo.py` generates 200 fully synthetic ICU patients (no real patient data — see legal notice in the script) and trains a demo model. The dashboard is immediately usable.
 
+### React Frontend (alternative UI)
+
+A modern React dashboard is available alongside the Streamlit app.
+
+**Install dependencies (first time only):**
+```bash
+cd frontend && npm install
+```
+
+**Run the full stack:**
+```bash
+# Terminal 1 — FastAPI backend
+uvicorn src.api.main:app --reload --port 8000
+
+# Terminal 2 — React frontend
+cd frontend && npm run dev
+```
+
+The React app runs on [http://localhost:5173](http://localhost:5173) and proxies API calls to the backend on port 8000. Make sure `setup_demo.py` has been run first so the model and data files exist.
+
 ---
 
 ## Full Pipeline (with MIMIC-IV access)
