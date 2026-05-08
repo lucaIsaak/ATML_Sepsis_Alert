@@ -1,0 +1,129 @@
+"""
+Narrative routes.
+
+GET  /narrative/models  — list available Ollama models
+POST /narrative/stream  — stream a clinical narrative for a patient
+"""
+
+from __future__ import annotations
+
+import requests
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+
+from src.api.routers.patients import _shap_cache, _risk_label
+from src.explainability.shap_explainer import SHAPExplanation, format_for_narrative
+from src.narrative.ollama_client import OllamaClient
+from src.data.narrative_feedback import load_few_shot_examples, find_similar_narratives
+
+router = APIRouter()
+
+
+class StreamRequest(BaseModel):
+    stay_id: int
+    model_name: str
+
+
+@router.get("/narrative/models")
+async def list_models(request: Request) -> list[str]:
+    """Return list of available Ollama model name strings."""
+    cfg = request.app.state.cfg
+    base_url = cfg["narrative"]["ollama_base_url"]
+    try:
+        resp = requests.get(f"{base_url}/api/tags", timeout=5)
+        resp.raise_for_status()
+        models = resp.json().get("models", [])
+        return [m["name"] for m in models]
+    except requests.exceptions.RequestException:
+        # Return empty list — frontend shows "Ollama not available"
+        return []
+
+
+@router.post("/narrative/stream")
+async def stream_narrative(body: StreamRequest, request: Request):
+    """Stream a clinical narrative for a patient using Ollama."""
+    predictions = request.app.state.predictions
+    artifact = request.app.state.artifact
+    cfg = request.app.state.cfg
+
+    stay_id = body.stay_id
+    model_name = body.model_name
+
+    row_df = predictions[predictions["stay_id"] == stay_id]
+    if row_df.empty:
+        raise HTTPException(status_code=404, detail=f"Patient {stay_id} not found")
+
+    row = row_df.iloc[0]
+    risk_score = float(row["risk_score"])
+
+    # Ensure SHAP is computed (may already be cached from patients router)
+    if stay_id not in _shap_cache:
+        from src.api.routers.patients import _get_explainer  # noqa: PLC0415
+        from src.explainability.shap_explainer import explain_patient  # noqa: PLC0415
+
+        feature_cols = artifact["feature_cols"]
+        feature_vector = row[feature_cols].values.astype(float)
+        explainer = _get_explainer(artifact, predictions)
+        explanation = explain_patient(
+            explainer=explainer,
+            feature_vector=feature_vector,
+            feature_names=list(feature_cols),
+            risk_score=risk_score,
+            stay_id=str(stay_id),
+            top_n=len(feature_cols),
+        )
+        _shap_cache[stay_id] = explanation.top_features
+
+    top_features = _shap_cache[stay_id][:10]
+
+    # Build SHAPExplanation for the narrative
+    explanation = SHAPExplanation(
+        stay_id=str(stay_id),
+        risk_score=risk_score,
+        risk_label=_risk_label(risk_score),
+        top_features=top_features,
+        base_value=0.0,
+    )
+
+    # Build few-shot + RAG context
+    shap_vector = {f["feature"]: f["shap"] for f in top_features}
+    few_shot = load_few_shot_examples(min_rating=4, max_examples=2, model_used=model_name)
+    similar = find_similar_narratives(
+        current_shap_vector=shap_vector,
+        top_n=1,
+        min_rating=4,
+        model_used=model_name,
+    )
+
+    context_parts = []
+    for ex in few_shot:
+        context_parts.append(
+            f"EXAMPLE (rated {ex['rating']}/5):\n"
+            f"Input: {ex['shap_summary']}\n"
+            f"Output: {ex['narrative_text']}"
+        )
+    for sim in similar:
+        context_parts.append(
+            f"[Similar patient, rated {sim['rating']}/5, "
+            f"similarity {sim['similarity']:.2f}]\n{sim['narrative_text']}"
+        )
+
+    context = "\n\n".join(context_parts) if context_parts else ""
+
+    # Override model in cfg
+    cfg_copy = dict(cfg)
+    cfg_copy["narrative"] = dict(cfg["narrative"])
+    cfg_copy["narrative"]["ollama_model"] = model_name
+
+    client = OllamaClient(cfg_copy)
+
+    def _generate():
+        for chunk in client.stream_alert(explanation, context):
+            yield chunk
+
+    return StreamingResponse(
+        _generate(),
+        media_type="text/plain",
+        headers={"X-Accel-Buffering": "no"},
+    )
