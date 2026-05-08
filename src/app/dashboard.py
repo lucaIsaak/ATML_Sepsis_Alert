@@ -3,7 +3,7 @@ SepsisAlert — Streamlit ICU Dashboard.
 
 Pages:
   1. Live Monitor    — patient table with risk scores
-  2. Patient Detail  — SHAP chart + LLM narrative
+  2. Patient Detail  — SHAP chart + LLM narrative + clinician feedback
   3. Model Stats     — AUROC, NEWS2 comparison
 """
 
@@ -20,6 +20,7 @@ import joblib  # noqa: E402
 import pandas as pd  # noqa: E402
 import plotly.graph_objects as go  # noqa: E402
 import streamlit as st  # noqa: E402
+import streamlit_shadcn_ui as ui  # noqa: E402
 
 from src.data.feedback import get_feedback_for_patient, save_feedback  # noqa: E402
 from src.data.narrative_feedback import (  # noqa: E402
@@ -93,6 +94,17 @@ div[data-testid="stProgress"] > div > div > div {
 
 /* Streamlit link colour */
 a { color: #0284c7 !important; }
+
+/* ── Shadcn-style content cards ─────────────────────────────────────
+   Applied to st.container(border=True) — matches the shadow and
+   border-radius of streamlit_shadcn_ui card components.           */
+div[data-testid="stVerticalBlockBorderWrapper"] > div {
+    border-radius: 12px !important;
+    border: 1px solid #e5e7eb !important;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06), 0 0 1px rgba(0,0,0,0.04) !important;
+    padding: 4px !important;
+    background: #ffffff !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -153,12 +165,19 @@ def risk_color(label):
 
 
 def risk_badge(label):
-    """Return an HTML badge element for the given risk label."""
+    """Return an HTML badge element for the given risk label (fallback / charts)."""
     color = risk_color(label)
     return (
         f'<span style="background:{color};color:white;'
         f'padding:2px 10px;border-radius:10px;font-weight:bold">'
         f'{label}</span>'
+    )
+
+
+def risk_badge_variant(label: str) -> str:
+    """Map a risk label to a streamlit-shadcn-ui badge variant."""
+    return {"HIGH": "destructive", "MODERATE": "warning", "LOW": "secondary"}.get(
+        label, "outline"
     )
 
 
@@ -208,31 +227,58 @@ def render_live_monitor(predictions, cohort):
     demo = demo.merge(cohort[cohort_cols], on="stay_id", how="left")
     demo = demo.sort_values("risk_score", ascending=False).reset_index(drop=True)
 
-    # KPI cards
+    # KPI cards — Shadcn metric_card
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Active Patients", len(demo))
-    col2.metric("High Risk", int((demo["risk_label"] == "HIGH").sum()))
-    col3.metric("Moderate Risk", int((demo["risk_label"] == "MODERATE").sum()))
-    col4.metric("Model AUROC", "0.895")
+    n_high = int((demo["risk_label"] == "HIGH").sum())
+    n_mod  = int((demo["risk_label"] == "MODERATE").sum())
+    with col1:
+        ui.metric_card(
+            title="Active Patients",
+            content=str(len(demo)),
+            description="Currently monitored",
+            key="kpi_active",
+        )
+    with col2:
+        ui.metric_card(
+            title="High Risk",
+            content=str(n_high),
+            description="Require immediate review",
+            key="kpi_high",
+        )
+    with col3:
+        ui.metric_card(
+            title="Moderate Risk",
+            content=str(n_mod),
+            description="Monitor closely",
+            key="kpi_mod",
+        )
+    with col4:
+        ui.metric_card(
+            title="Model AUROC",
+            content="0.895",
+            description="+0.281 vs NEWS2 baseline",
+            key="kpi_auroc",
+        )
 
     st.divider()
 
-    # Risk distribution bar
-    counts = demo["risk_label"].value_counts().reindex(["HIGH", "MODERATE", "LOW"], fill_value=0)
-    fig = go.Figure(go.Bar(
-        x=counts.index,
-        y=counts.values,
-        marker_color=[risk_color(lbl) for lbl in counts.index],
-        text=counts.values,
-        textposition="auto",
-    ))
-    fig.update_layout(
-        title="Risk Distribution — Active Patients",
-        xaxis_title="Risk Level", yaxis_title="Count",
-        height=250, margin={"t": 40, "b": 20},
-        plot_bgcolor="rgba(0,0,0,0)",
-    )
-    st.plotly_chart(fig, use_container_width=True)
+    # Risk distribution bar — wrapped in a card
+    with st.container(border=True):
+        counts = demo["risk_label"].value_counts().reindex(["HIGH", "MODERATE", "LOW"], fill_value=0)
+        fig = go.Figure(go.Bar(
+            x=counts.index,
+            y=counts.values,
+            marker_color=[risk_color(lbl) for lbl in counts.index],
+            text=counts.values,
+            textposition="auto",
+        ))
+        fig.update_layout(
+            title="Risk Distribution — Active Patients",
+            xaxis_title="Risk Level", yaxis_title="Count",
+            height=250, margin={"t": 40, "b": 20},
+            plot_bgcolor="rgba(0,0,0,0)",
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
     st.divider()
     st.subheader("Patient Risk Table")
@@ -410,7 +456,11 @@ def _render_narrative_panel(stay_id):
     col_btn, col_model, col_rest = st.columns([3, 2, 3])
 
     with col_btn:
-        generate = st.button("Generate Narrative", type="primary", use_container_width=True)
+        generate = ui.button(
+            "✨ Generate Narrative",
+            variant="default",
+            key="btn_generate_narrative",
+        )
 
     with col_model:
         if installed_models:
@@ -428,7 +478,11 @@ def _render_narrative_panel(stay_id):
             )
         else:
             selected_model = None
-            st.error("Ollama not running. Start with: `ollama serve`")
+            ui.alert(
+                title="Ollama not running",
+                description="Start the server with: ollama serve",
+                key="ollama_error_alert",
+            )
 
     if generate:
         if not installed_models:
@@ -618,31 +672,60 @@ def render_patient_detail(  # pylint: disable=too-many-locals
     # Header
     col1, col2, col3 = st.columns([1, 1, 2])
     with col1:
-        st.metric("Risk Score", f"{risk_score:.3f}")
-        st.markdown(f"Risk Level: {risk_badge(risk_label)}", unsafe_allow_html=True)
+        ui.metric_card(
+            title="Risk Score",
+            content=f"{risk_score:.1%}",
+            description="Sepsis probability",
+            key="pd_risk_score",
+        )
+        st.write("Risk level:")
+        ui.badges(
+            [(risk_label, risk_badge_variant(risk_label))],
+            key="pd_risk_badge",
+        )
     with col2:
         if not cohort_row.empty:
             cr = cohort_row.iloc[0]
-            st.metric("Age", int(cr.get("age", 0)))
-            st.metric("Care Unit", str(cr.get("first_careunit", "-"))[:25])
+            ui.metric_card(
+                title="Age",
+                content=str(int(cr.get("age", 0))),
+                description=str(cr.get("first_careunit", "-"))[:30],
+                key="pd_age_card",
+            )
     with col3:
-        # ── Clinician feedback buttons ──────────────────────────
+        # ── Clinician feedback banners ──────────────────────────
         existing = get_feedback_for_patient(stay_id_int)
         if existing:
             ftype = existing["feedback_type"]
             if ftype == "confirmed_sepsis":
-                st.success("✅ Labelled: Sepsis Confirmed")
+                ui.alert(
+                    title="Labelled: Sepsis Confirmed",
+                    description="This patient has been confirmed as sepsis by a clinician.",
+                    key="fb_confirmed_banner",
+                )
             else:
-                st.warning("🚩 Labelled: Flagged as Wrong Alert")
+                ui.alert(
+                    title="Labelled: Flagged as Wrong Alert",
+                    description="A clinician marked this alert as incorrect.",
+                    key="fb_flagged_banner",
+                )
 
         btn_confirm, btn_flag = st.columns(2)
         with btn_confirm:
-            if st.button("✅ Confirm Sepsis", type="primary", use_container_width=True):
+            if ui.button(
+                "✅ Confirm Sepsis",
+                variant="default",
+                key="btn_confirm_sepsis",
+            ):
                 save_feedback(stay_id_int, "confirmed_sepsis", risk_score)
                 st.toast("Saved: Sepsis confirmed ✅", icon="✅")
                 st.rerun()
         with btn_flag:
-            if st.button("🚩 Flag as Wrong", use_container_width=True):
+            if ui.button(
+                "🚩 Flag as Wrong",
+                variant="outline",
+                key="btn_flag_wrong",
+            ):
                 save_feedback(stay_id_int, "flagged_wrong", risk_score)
                 st.toast("Saved: Alert flagged as incorrect 🚩", icon="🚩")
                 st.rerun()
@@ -669,16 +752,18 @@ def render_patient_detail(  # pylint: disable=too-many-locals
 
     st.divider()
 
-    # SHAP + Narrative side by side
+    # SHAP + Narrative side by side — each in its own card
     col_shap, col_narr = st.columns([1, 1])
 
     with col_shap:
-        st.subheader("Feature Contributions (SHAP)")
-        st.caption("Which values drove this risk score?")
-        _render_shap_chart(feature_row, artifact, features_df, risk_score, stay_id)
+        with st.container(border=True):
+            st.subheader("Feature Contributions (SHAP)")
+            st.caption("Which values drove this risk score?")
+            _render_shap_chart(feature_row, artifact, features_df, risk_score, stay_id)
 
     with col_narr:
-        _render_narrative_panel(stay_id)
+        with st.container(border=True):
+            _render_narrative_panel(stay_id)
 
     st.divider()
 
@@ -700,66 +785,104 @@ def render_model_performance(predictions):  # pylint: disable=too-many-locals
     st.title("Model Performance")
 
     col1, col2, col3 = st.columns(3)
-    col1.metric("SepsisAlert AUROC", "0.895", delta="+0.281 vs NEWS2")
-    col2.metric("NEWS2 AUROC", "0.614")
-    col3.metric("AUPRC", "0.527")
+    with col1:
+        ui.metric_card(
+            title="SepsisAlert AUROC",
+            content="0.895",
+            description="↑ +0.281 vs NEWS2 baseline",
+            key="mp_auroc",
+        )
+    with col2:
+        ui.metric_card(
+            title="NEWS2 AUROC",
+            content="0.614",
+            description="Clinical standard benchmark",
+            key="mp_news2",
+        )
+    with col3:
+        ui.metric_card(
+            title="AUPRC",
+            content="0.527",
+            description="Precision-recall area",
+            key="mp_auprc",
+        )
 
     st.divider()
 
     col_roc, col_bar = st.columns(2)
 
     with col_roc:
-        st.subheader("AUROC Comparison")
+        with st.container(border=True):
+            st.subheader("AUROC Comparison")
 
-        if predictions is not None:
-            from sklearn.metrics import roc_curve  # pylint: disable=import-outside-toplevel
-            features_df = load_features()
-            if features_df is not None:
-                y_true = predictions["sepsis_label"].values
-                y_score = predictions["risk_score"].values
+            if predictions is not None:
+                from sklearn.metrics import roc_curve  # pylint: disable=import-outside-toplevel
+                features_df = load_features()
+                if features_df is not None:
+                    y_true = predictions["sepsis_label"].values
+                    y_score = predictions["risk_score"].values
 
-                fpr, tpr, _ = roc_curve(y_true, y_score)
-                news2_scores = features_df.apply(news2_score, axis=1).values
-                fpr2, tpr2, _ = roc_curve(y_true, news2_scores)
+                    fpr, tpr, _ = roc_curve(y_true, y_score)
+                    news2_scores = features_df.apply(news2_score, axis=1).values
+                    fpr2, tpr2, _ = roc_curve(y_true, news2_scores)
 
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(x=fpr, y=tpr, name="SepsisAlert (0.895)",
-                                         line={"color": "#0284c7", "width": 2}))
-                fig.add_trace(go.Scatter(x=fpr2, y=tpr2, name="NEWS2 (0.614)",
-                                         line={"color": "#94a3b8", "width": 2, "dash": "dash"}))
-                fig.add_trace(go.Scatter(x=[0, 1], y=[0, 1], name="Random",
-                                         line={"color": "gray", "dash": "dot"}))
-                fig.update_layout(
-                    xaxis_title="False Positive Rate",
-                    yaxis_title="True Positive Rate",
-                    height=350,
-                    legend={"x": 0.6, "y": 0.1},
-                    plot_bgcolor="rgba(0,0,0,0)",
-                )
-                st.plotly_chart(fig, use_container_width=True)
+                    fig = go.Figure()
+                    fig.add_trace(go.Scatter(x=fpr, y=tpr, name="SepsisAlert (0.895)",
+                                             line={"color": "#0284c7", "width": 2}))
+                    fig.add_trace(go.Scatter(x=fpr2, y=tpr2, name="NEWS2 (0.614)",
+                                             line={"color": "#94a3b8", "width": 2, "dash": "dash"}))
+                    fig.add_trace(go.Scatter(x=[0, 1], y=[0, 1], name="Random",
+                                             line={"color": "gray", "dash": "dot"}))
+                    fig.update_layout(
+                        xaxis_title="False Positive Rate",
+                        yaxis_title="True Positive Rate",
+                        height=350,
+                        legend={"x": 0.6, "y": 0.1},
+                        plot_bgcolor="rgba(0,0,0,0)",
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
 
     with col_bar:
-        st.subheader("AUROC by Model")
-        fig = go.Figure(go.Bar(
-            x=["SepsisAlert\n(This work)", "NEWS2\n(Clinical standard)"],
-            y=[0.895, 0.614],
-            marker_color=["#0284c7", "#94a3b8"],
-            text=["0.895", "0.614"],
-            textposition="outside",
-        ))
-        fig.update_layout(
-            yaxis={"range": [0, 1]},
-            height=350,
-            plot_bgcolor="rgba(0,0,0,0)",
-        )
-        st.plotly_chart(fig, use_container_width=True)
+        with st.container(border=True):
+            st.subheader("AUROC by Model")
+            fig = go.Figure(go.Bar(
+                x=["SepsisAlert\n(This work)", "NEWS2\n(Clinical standard)"],
+                y=[0.895, 0.614],
+                marker_color=["#0284c7", "#94a3b8"],
+                text=["0.895", "0.614"],
+                textposition="outside",
+            ))
+            fig.update_layout(
+                yaxis={"range": [0, 1]},
+                height=350,
+                plot_bgcolor="rgba(0,0,0,0)",
+            )
+            st.plotly_chart(fig, use_container_width=True)
 
     st.divider()
     st.subheader("Training Cohort Summary")
     col1, col2, col3 = st.columns(3)
-    col1.metric("Total ICU Stays", "93,224")
-    col2.metric("Sepsis Cases", "9,890 (10.6%)")
-    col3.metric("Features", "43")
+    with col1:
+        ui.metric_card(
+            title="Total ICU Stays",
+            content="93,224",
+            description="MIMIC-IV 3.1",
+            key="cohort_stays",
+        )
+    with col2:
+        ui.metric_card(
+            title="Sepsis Cases",
+            content="9,890",
+            description="10.6% prevalence (ICD-10 A41.x)",
+            key="cohort_sepsis",
+        )
+    with col3:
+        ui.metric_card(
+            title="Features",
+            content="43",
+            description="Vitals + labs + derived",
+            key="cohort_features",
+        )
 
     st.subheader("Dataset — MIMIC-IV 3.1")
     st.markdown("""

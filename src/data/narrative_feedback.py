@@ -53,7 +53,7 @@ def save_narrative_feedback(
         "narrative_text": narrative_text,
         "shap_summary": shap_summary,
         "model_used": model_used,
-        "shap_vector": {k: float(v) for k, v in shap_vector.items()},
+        "shap_vector": {k: float(v) for k, v in shap_vector.items()} if shap_vector else {},
     }
     with _LOG_PATH.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record) + "\n")
