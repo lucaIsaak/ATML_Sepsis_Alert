@@ -19,6 +19,11 @@ streamlit>=1.35.0
 plotly>=5.20.0
 altair>=5.0.0
 
+# API
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9
+
 # Validation & Testing
 pydantic>=2.6.0
 pytest>=8.0.0
