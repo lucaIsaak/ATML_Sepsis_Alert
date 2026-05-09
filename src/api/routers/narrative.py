@@ -120,6 +120,18 @@ async def stream_narrative(body: StreamRequest, request: Request):
     cfg_copy["narrative"] = dict(cfg["narrative"])
     cfg_copy["narrative"]["ollama_model"] = model_name
 
+    # GDPR hard gate — patient data must never leave the hospital server.
+    # Non-local providers (claude, huggingface) are explicitly blocked.
+    if cfg_copy["narrative"].get("provider", "ollama") != "ollama":
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Non-local narrative providers are disabled for GDPR compliance. "
+                "Patient data must not leave the hospital server. "
+                "Set narrative.provider to 'ollama' in config.yaml."
+            ),
+        )
+
     client = OllamaClient(cfg_copy)
     shap_summary = format_for_narrative(explanation)
 
