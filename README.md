@@ -11,7 +11,7 @@ Sepsis kills **11 million people/year** — 1 in 5 global deaths. In European IC
 
 Current tools (NEWS2, SIRS) are static, rule-based, and provide **no explanation** for why an alert was triggered. Clinicians receive a score they can't trust, leading to alert fatigue.
 
-**SepsisAlert solves this**: a gradient boosting model detects sepsis 4–6 hours early, SHAP traces every alert to its exact clinical cause, and a local LLM translates the output into plain-language explanations nurses can act on immediately.
+**SepsisAlert solves this**: a gradient boosting model detects risk patterns consistent with early-stage sepsis (AUROC 0.895 vs NEWS2 0.614), SHAP traces every alert to its exact clinical cause, and a local LLM translates the output into plain-language explanations nurses can act on immediately.
 
 ---
 
