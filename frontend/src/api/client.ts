@@ -1,5 +1,5 @@
 import axios from 'axios'
-import type { Patient, PatientDetail, ClinicalFeedback, ModelStats, FeedbackAgentStatus } from '@/types'
+import type { Patient, PatientDetail, ClinicalFeedback, ModelStats, FeedbackAgentStatus, DriftStatus } from '@/types'
 
 const api = axios.create({
   baseURL: '/api',
@@ -45,6 +45,10 @@ export function saveNarrativeFeedback(data: {
   return api.post('/feedback/narrative', data).then(() => undefined)
 }
 
+export function getWhisperStatus(): Promise<{ available: boolean; message: string }> {
+  return api.get('/feedback/whisper-status').then((r) => r.data)
+}
+
 export function transcribeAudio(blob: Blob): Promise<string> {
   const form = new FormData()
   form.append('file', blob, 'audio.webm')
@@ -55,8 +59,16 @@ export function transcribeAudio(blob: Blob): Promise<string> {
     .then((r) => r.data.text)
 }
 
+export function getAuditLog(n = 20): Promise<Record<string, unknown>[]> {
+  return api.get(`/audit?n=${n}`).then((r) => r.data)
+}
+
 export function getModelStats(): Promise<ModelStats> {
   return api.get<ModelStats>('/stats').then((r) => r.data)
+}
+
+export function getDriftStatus(): Promise<DriftStatus> {
+  return api.get<DriftStatus>('/drift/status').then((r) => r.data)
 }
 
 export function getFeedbackAgentStatus(): Promise<FeedbackAgentStatus> {

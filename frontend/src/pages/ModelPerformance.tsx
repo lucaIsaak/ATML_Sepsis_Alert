@@ -14,11 +14,11 @@ import {
   Cell,
 } from 'recharts'
 import { useState, useEffect, useRef } from 'react'
-import { Loader2, RefreshCw, Play } from 'lucide-react'
-import { getModelStats, getFeedbackAgentStatus, triggerRetrain, getRetrainStatus } from '@/api/client'
+import { Loader2, RefreshCw, Play, ChevronDown, ChevronRight } from 'lucide-react'
+import { getModelStats, getFeedbackAgentStatus, triggerRetrain, getRetrainStatus, getDriftStatus, getAuditLog } from '@/api/client'
 import { MetricCard } from '@/components/MetricCard'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import type { FeedbackAgentStatus } from '@/types'
+import type { FeedbackAgentStatus, DriftStatus } from '@/types'
 
 // ------------------------------------------------------------------ //
 // Feedback Loop Agent status card                                      //
@@ -151,6 +151,43 @@ function FeedbackAgentCard() {
               </div>
             </div>
 
+            {/* Progress toward retrain thresholds */}
+            <div className="border-t pt-3 space-y-2">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                Progress toward retraining
+              </p>
+              {/* Confirmed sepsis labels */}
+              <div className="space-y-1">
+                <div className="flex justify-between text-xs">
+                  <span className="text-muted-foreground">Confirmed sepsis labels</span>
+                  <span className="font-medium">{status.confirmed_sepsis} / 20</span>
+                </div>
+                <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-primary transition-all"
+                    style={{ width: `${Math.min(100, (status.confirmed_sepsis / 20) * 100)}%` }}
+                  />
+                </div>
+              </div>
+              {/* FP rate */}
+              <div className="space-y-1">
+                <div className="flex justify-between text-xs">
+                  <span className="text-muted-foreground">False positive rate</span>
+                  <span className="font-medium">
+                    {status.fp_rate != null ? `${(status.fp_rate * 100).toFixed(0)}%` : '—'} / 30% threshold
+                  </span>
+                </div>
+                <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all ${
+                      status.fp_rate != null && status.fp_rate > 0.3 ? 'bg-red-500' : 'bg-amber-400'
+                    }`}
+                    style={{ width: `${Math.min(100, ((status.fp_rate ?? 0) / 0.3) * 100)}%` }}
+                  />
+                </div>
+              </div>
+            </div>
+
             {/* Recent clinician corrections */}
             {status.correction_notes.length > 0 && (
               <div className="border-t pt-3">
@@ -167,15 +204,26 @@ function FeedbackAgentCard() {
               </div>
             )}
 
-            {/* ── Retrain button — only shown when RETRAIN is recommended ── */}
-            {status.decision === 'RETRAIN' && (
+            {/* ── Retrain section — always visible ── */}
+            {(status.decision === 'RETRAIN' || true) && (
               <div className="border-t pt-4 space-y-3">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-sm font-medium">Model retraining available</p>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      Enough labelled data has accumulated to improve the model.
-                    </p>
+                    {status.decision === 'RETRAIN' ? (
+                      <>
+                        <p className="text-sm font-medium">Model retraining recommended</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          Enough labelled data has accumulated to improve the model.
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-sm font-medium text-muted-foreground">Manual retrain</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          Thresholds not yet met — proceed only if you have clinical reason.
+                        </p>
+                      </>
+                    )}
                   </div>
                   <button
                     onClick={handleRetrain}
@@ -184,7 +232,9 @@ function FeedbackAgentCard() {
                       'flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors',
                       retrainStatus === 'running' || launching
                         ? 'bg-muted text-muted-foreground cursor-not-allowed'
-                        : 'bg-primary text-primary-foreground hover:bg-primary/90',
+                        : status.decision === 'RETRAIN'
+                        ? 'bg-primary text-primary-foreground hover:bg-primary/90'
+                        : 'bg-muted text-muted-foreground border border-border hover:bg-muted/80',
                     ].join(' ')}
                   >
                     {retrainStatus === 'running' || launching ? (
@@ -236,10 +286,195 @@ function FeedbackAgentCard() {
   )
 }
 
+// ------------------------------------------------------------------ //
+// Drift Monitor components                                            //
+// ------------------------------------------------------------------ //
+
+const DRIFT_STYLES: Record<DriftStatus['overall_status'], {
+  bg: string; border: string; dot: string; text: string; label: string
+}> = {
+  stable:      { bg: 'bg-emerald-50', border: 'border-emerald-200', dot: 'bg-emerald-500', text: 'text-emerald-700', label: 'No drift detected' },
+  moderate:    { bg: 'bg-amber-50',   border: 'border-amber-200',   dot: 'bg-amber-500',   text: 'text-amber-700',   label: 'Moderate drift'    },
+  significant: { bg: 'bg-red-50',     border: 'border-red-200',     dot: 'bg-red-500',     text: 'text-red-700',     label: 'Significant drift' },
+  unknown:     { bg: 'bg-slate-50',   border: 'border-slate-200',   dot: 'bg-slate-400',   text: 'text-slate-600',   label: 'Insufficient data' },
+}
+
+const PSI_STATUS_STYLES: Record<string, string> = {
+  stable:      'text-emerald-600',
+  moderate:    'text-amber-600',
+  significant: 'text-red-600',
+  unknown:     'text-slate-400',
+}
+
+const RISK_COLORS: Record<string, string> = {
+  CRITICAL: '#ef4444',
+  HIGH:     '#f97316',
+  MODERATE: '#f59e0b',
+  LOW:      '#22c55e',
+}
+
+function DriftMonitorSection({ drift }: { drift: DriftStatus }) {
+  const style = DRIFT_STYLES[drift.overall_status]
+
+  // PSI sparkline data
+  const sparkData = drift.psi_history.map((h) => ({
+    ts:  new Date(h.ts).toLocaleDateString(),
+    psi: h.psi ?? 0,
+  }))
+
+  // Risk distribution bar data
+  const riskOrder = ['CRITICAL', 'HIGH', 'MODERATE', 'LOW']
+  const riskBarData = riskOrder.map((tier) => ({
+    tier,
+    live:     Math.round((drift.risk_distribution.live[tier] ?? 0) * 100),
+    expected: Math.round((drift.risk_distribution.expected[tier] ?? 0) * 100),
+  }))
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-lg font-semibold tracking-tight">Data Drift Monitor</h2>
+        <p className="text-muted-foreground text-sm mt-0.5">
+          Live patient features vs. MIMIC-IV training distribution (PSI)
+        </p>
+      </div>
+
+      {/* Banner */}
+      <div className={`rounded-lg border px-4 py-3 flex items-center gap-3 ${style.bg} ${style.border}`}>
+        <div className={`h-2.5 w-2.5 rounded-full flex-shrink-0 ${style.dot}`} />
+        <div className="flex-1">
+          <span className={`font-semibold text-sm ${style.text}`}>{style.label}</span>
+          {drift.overall_psi != null && (
+            <span className={`text-sm ml-2 ${style.text} opacity-75`}>
+              — max PSI {drift.overall_psi.toFixed(3)} across {drift.features.length} features
+              ({drift.live_patients} live patients)
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Data source note — always shown */}
+      <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600 leading-relaxed">
+        <span className="font-semibold">Note on interpretation:</span>{' '}
+        The &ldquo;live&rdquo; patients shown here are sampled from the same MIMIC-IV dataset used for training,
+        so PSI values reflect sampling noise rather than true distribution shift.
+        This monitor becomes meaningful once genuinely new patient data flows in —
+        values below 0.10 are stable, 0.10–0.20 indicate moderate drift, and above 0.20 warrant investigation.
+      </div>
+
+      {/* Feature table + Risk distribution side by side */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+        {/* Feature drift table */}
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">Feature PSI — worst first</CardTitle>
+          </CardHeader>
+          <CardContent className="p-0">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b bg-muted/30">
+                  <th className="text-left py-2 px-4 text-xs font-semibold text-muted-foreground">Feature</th>
+                  <th className="text-right py-2 px-3 text-xs font-semibold text-muted-foreground">Train mean</th>
+                  <th className="text-right py-2 px-3 text-xs font-semibold text-muted-foreground">Live mean</th>
+                  <th className="text-right py-2 px-4 text-xs font-semibold text-muted-foreground">PSI</th>
+                </tr>
+              </thead>
+              <tbody>
+                {drift.features.map((f) => (
+                  <tr key={f.feature} className="border-b last:border-0 hover:bg-muted/20">
+                    <td className="py-2 px-4 font-medium text-xs">{f.label}</td>
+                    <td className="py-2 px-3 text-right text-xs text-muted-foreground">
+                      {f.train_mean != null ? f.train_mean.toFixed(1) : '—'}
+                    </td>
+                    <td className="py-2 px-3 text-right text-xs text-muted-foreground">
+                      {f.live_mean != null ? f.live_mean.toFixed(1) : '—'}
+                    </td>
+                    <td className="py-2 px-4 text-right">
+                      <span className={`text-xs font-semibold ${PSI_STATUS_STYLES[f.status]}`}>
+                        {f.psi != null ? f.psi.toFixed(3) : '—'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </CardContent>
+        </Card>
+
+        {/* Risk distribution + PSI history */}
+        <div className="space-y-4">
+          {/* Risk distribution */}
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm">Risk tier distribution — live vs. expected</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ResponsiveContainer width="100%" height={160}>
+                <BarChart data={riskBarData} margin={{ top: 4, right: 8, bottom: 4, left: -16 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                  <XAxis dataKey="tier" tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 11 }} unit="%" />
+                  <Tooltip formatter={(v: number) => `${v}%`} />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  <Bar dataKey="live" name="Live" radius={[3, 3, 0, 0]}>
+                    {riskBarData.map((entry) => (
+                      <Cell key={entry.tier} fill={RISK_COLORS[entry.tier]} />
+                    ))}
+                  </Bar>
+                  <Bar dataKey="expected" name="Expected" fill="#94a3b8" radius={[3, 3, 0, 0]} opacity={0.5} />
+                </BarChart>
+              </ResponsiveContainer>
+            </CardContent>
+          </Card>
+
+          {/* PSI sparkline */}
+          {sparkData.length > 1 && (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm">Max PSI trend</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <ResponsiveContainer width="100%" height={100}>
+                  <LineChart data={sparkData} margin={{ top: 4, right: 8, bottom: 4, left: -16 }}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="ts" tick={{ fontSize: 10 }} />
+                    <YAxis tick={{ fontSize: 10 }} domain={[0, 'auto']} />
+                    <Tooltip formatter={(v: number) => v.toFixed(3)} />
+                    <ReferenceLine y={0.1} stroke="#f59e0b" strokeDasharray="4 4" />
+                    <ReferenceLine y={0.2} stroke="#ef4444" strokeDasharray="4 4" />
+                    <Line type="monotone" dataKey="psi" name="Max PSI" stroke="#0284c7" dot={false} strokeWidth={2} />
+                  </LineChart>
+                </ResponsiveContainer>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Dashed lines: 0.1 (moderate) and 0.2 (significant) thresholds
+                </p>
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function ModelPerformance() {
   const { data: stats, isLoading } = useQuery({
     queryKey: ['stats'],
     queryFn: getModelStats,
+  })
+
+  const { data: drift } = useQuery({
+    queryKey: ['drift-status'],
+    queryFn: getDriftStatus,
+    refetchInterval: 5 * 60_000,
+  })
+
+  const [auditOpen, setAuditOpen] = useState(false)
+  const { data: auditLog = [], refetch: refetchAudit } = useQuery({
+    queryKey: ['audit-log'],
+    queryFn: () => getAuditLog(20),
+    enabled: auditOpen,   // only fetch when expanded
   })
 
   if (isLoading) {
@@ -296,8 +531,8 @@ export function ModelPerformance() {
         </p>
       </div>
 
-      {/* Top metrics */}
-      <div className="grid grid-cols-3 gap-4">
+      {/* Top metrics — 4 cards */}
+      <div className="grid grid-cols-4 gap-4">
         <MetricCard
           title="SepsisAlert AUROC"
           value={stats.auroc.toFixed(3)}
@@ -315,6 +550,30 @@ export function ModelPerformance() {
           value={stats.auprc.toFixed(3)}
           description="Average precision (imbalanced)"
         />
+        {/* Drift status card */}
+        {drift ? (() => {
+          const s = DRIFT_STYLES[drift.overall_status]
+          return (
+            <div className={`rounded-xl border p-4 flex flex-col gap-2 ${s.bg} ${s.border}`}>
+              <p className="text-sm font-medium text-muted-foreground">Data Drift</p>
+              <div className="flex items-center gap-2">
+                <div className={`h-2.5 w-2.5 rounded-full ${s.dot}`} />
+                <p className={`text-lg font-bold leading-tight ${s.text}`}>{s.label}</p>
+              </div>
+              <p className={`text-xs ${s.text} opacity-75`}>
+                {drift.overall_psi != null ? `Max PSI ${drift.overall_psi.toFixed(3)}` : 'Evaluating…'}
+              </p>
+            </div>
+          )
+        })() : (
+          <div className="rounded-xl border p-4 flex flex-col gap-2 bg-slate-50 border-slate-200">
+            <p className="text-sm font-medium text-muted-foreground">Data Drift</p>
+            <div className="flex items-center gap-2">
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+              <p className="text-sm text-muted-foreground">Loading…</p>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Charts */}
@@ -418,7 +677,81 @@ export function ModelPerformance() {
         />
       </div>
 
-      {/* Dataset info table */}
+      {/* Feedback Loop Agent */}
+      <FeedbackAgentCard />
+
+      {/* Drift Monitor */}
+      {drift && <DriftMonitorSection drift={drift} />}
+
+      {/* Audit Log */}
+      <Card>
+        <button
+          className="w-full flex items-center justify-between px-6 py-4 text-left"
+          onClick={() => {
+            setAuditOpen((v) => {
+              if (!v) refetchAudit()
+              return !v
+            })
+          }}
+        >
+          <span className="font-medium text-sm">Audit Log <span className="text-muted-foreground font-normal">(last 20 alerts)</span></span>
+          {auditOpen
+            ? <ChevronDown className="h-4 w-4 text-muted-foreground" />
+            : <ChevronRight className="h-4 w-4 text-muted-foreground" />
+          }
+        </button>
+        {auditOpen && (
+          <CardContent className="pt-0">
+            {auditLog.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-4 text-center">No audit entries yet.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b bg-muted/50">
+                      <th className="px-3 py-2 text-left font-semibold text-muted-foreground">Timestamp</th>
+                      <th className="px-3 py-2 text-left font-semibold text-muted-foreground">Stay ID</th>
+                      <th className="px-3 py-2 text-left font-semibold text-muted-foreground">Risk tier</th>
+                      <th className="px-3 py-2 text-right font-semibold text-muted-foreground">Risk score</th>
+                      <th className="px-3 py-2 text-left font-semibold text-muted-foreground">OOD flag</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {auditLog.map((entry, i) => (
+                      <tr key={i} className="border-b last:border-0 hover:bg-muted/20">
+                        <td className="px-3 py-2 text-muted-foreground font-mono">
+                          {entry.timestamp ? new Date(entry.timestamp as string).toLocaleString() : '—'}
+                        </td>
+                        <td className="px-3 py-2 font-medium">{String(entry.stay_id ?? '—')}</td>
+                        <td className="px-3 py-2">
+                          <span className={[
+                            'px-1.5 py-0.5 rounded text-xs font-semibold',
+                            entry.risk_tier === 'HIGH' || entry.risk_tier === 'CRITICAL'
+                              ? 'bg-red-100 text-red-700'
+                              : entry.risk_tier === 'MODERATE'
+                              ? 'bg-amber-100 text-amber-700'
+                              : 'bg-emerald-100 text-emerald-700',
+                          ].join(' ')}>
+                            {String(entry.risk_tier ?? '—')}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2 text-right font-mono">
+                          {entry.risk_score != null ? Number(entry.risk_score).toFixed(3) : '—'}
+                        </td>
+                        <td className="px-3 py-2 text-muted-foreground">
+                          {String(entry.ood_flag ?? 'NORMAL')}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </CardContent>
+        )}
+      </Card>
+
+      {/* Dataset & Methodology — bottom */}
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Dataset & Methodology</CardTitle>
@@ -436,9 +769,6 @@ export function ModelPerformance() {
           </table>
         </CardContent>
       </Card>
-
-      {/* Feedback Loop Agent status */}
-      <FeedbackAgentCard />
     </div>
   )
 }

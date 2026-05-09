@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Mic, MicOff, Send, Star, Loader2, Zap } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { getModels, streamNarrative, saveNarrativeFeedback, transcribeAudio } from '@/api/client'
+import { getModels, streamNarrative, saveNarrativeFeedback, transcribeAudio, getWhisperStatus } from '@/api/client'
 import type { PatientDetail } from '@/types'
 
 interface NarrativePanelProps {
@@ -30,6 +30,13 @@ export function NarrativePanel({ stayId, patientDetail }: NarrativePanelProps) {
     queryFn: getModels,
     staleTime: 60_000,
   })
+
+  const { data: whisperStatus } = useQuery({
+    queryKey: ['whisper-status'],
+    queryFn: getWhisperStatus,
+    staleTime: 5 * 60_000,
+  })
+  const whisperAvailable = whisperStatus?.available ?? false
 
   const currentModel = selectedModel || models[0] || ''
 
@@ -177,9 +184,14 @@ export function NarrativePanel({ stayId, patientDetail }: NarrativePanelProps) {
               <Button
                 variant="outline"
                 size="icon"
-                className={isRecording ? 'border-destructive text-destructive' : ''}
-                onClick={isRecording ? handleStopRecording : handleStartRecording}
-                title={isRecording ? 'Stop recording' : 'Record voice note'}
+                className={isRecording ? 'border-destructive text-destructive' : !whisperAvailable ? 'opacity-40 cursor-not-allowed' : ''}
+                onClick={whisperAvailable ? (isRecording ? handleStopRecording : handleStartRecording) : undefined}
+                title={
+                  !whisperAvailable
+                    ? (whisperStatus?.message ?? 'Whisper not available')
+                    : isRecording ? 'Stop recording' : 'Record voice note'
+                }
+                disabled={!whisperAvailable && !isRecording}
               >
                 {isTranscribing ? (
                   <Loader2 className="h-4 w-4 animate-spin" />

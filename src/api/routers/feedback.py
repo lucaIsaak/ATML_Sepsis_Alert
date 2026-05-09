@@ -109,6 +109,16 @@ async def save_narrative_fb(body: NarrativeFeedbackRequest, request: Request):
     return {"status": "saved"}
 
 
+@router.get("/feedback/whisper-status")
+async def get_whisper_status():
+    """Return whether Whisper is installed and available for transcription."""
+    available = is_whisper_available()
+    return {
+        "available": available,
+        "message": "Whisper ready" if available else "openai-whisper not installed. Run: pip install openai-whisper",
+    }
+
+
 @router.post("/feedback/transcribe")
 async def transcribe_audio_endpoint(file: UploadFile = File(...)):
     """Transcribe an uploaded audio file to text using Whisper."""

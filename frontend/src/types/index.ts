@@ -17,6 +17,8 @@ export interface ShapFeature {
 export interface PatientDetail extends Patient {
   shap_top: ShapFeature[]      // top 16 by |shap|, used as top 8 in UI
   shap_bottom: ShapFeature[]   // bottom 8 by |shap|
+  ood_flag: 'NORMAL' | 'BORDERLINE' | 'OOD'
+  outlier_features: string[]
 }
 
 export interface ClinicalFeedback {
@@ -33,6 +35,31 @@ export interface ModelStats {
   features: number
   roc_sepsis: Array<{ fpr: number; tpr: number }>
   roc_news2: Array<{ fpr: number; tpr: number }>
+}
+
+export interface DriftFeature {
+  feature: string
+  label: string
+  train_mean: number | null
+  live_mean: number | null
+  psi: number | null
+  status: 'stable' | 'moderate' | 'significant' | 'unknown'
+}
+
+export interface DriftStatus {
+  overall_status: 'stable' | 'moderate' | 'significant' | 'unknown'
+  overall_psi: number | null
+  features: DriftFeature[]
+  risk_distribution: {
+    live: Record<string, number>
+    expected: Record<string, number>
+    live_counts: Record<string, number>
+    total_live: number
+  }
+  psi_history: Array<{ ts: string; psi: number | null; status: string }>
+  evaluated_at: string
+  live_patients: number
+  note: string | null
 }
 
 export interface FeedbackAgentStatus {

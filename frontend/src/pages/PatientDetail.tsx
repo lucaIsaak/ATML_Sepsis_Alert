@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { ChevronDown, ChevronRight, ArrowLeft, CheckCircle, XCircle, Loader2 } from 'lucide-react'
+import { ChevronDown, ChevronRight, ArrowLeft, CheckCircle, XCircle, Loader2, AlertTriangle, ShieldAlert } from 'lucide-react'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@radix-ui/react-tabs'
 import { getPatientDetail, getClinicalFeedback, saveClinicalFeedback } from '@/api/client'
 import { MetricCard } from '@/components/MetricCard'
@@ -94,6 +94,32 @@ export function PatientDetailPage() {
             </strong>{' '}
             (risk score at time: {feedback.risk_score.toFixed(3)})
           </span>
+        </div>
+      )}
+
+      {/* OOD warning */}
+      {patient.ood_flag !== 'NORMAL' && (
+        <div className={[
+          'rounded-md px-4 py-3 text-sm flex items-start gap-3 border',
+          patient.ood_flag === 'OOD'
+            ? 'bg-red-50 text-red-800 border-red-200'
+            : 'bg-amber-50 text-amber-800 border-amber-200',
+        ].join(' ')}>
+          {patient.ood_flag === 'OOD'
+            ? <ShieldAlert className="h-4 w-4 shrink-0 mt-0.5" />
+            : <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />}
+          <div>
+            <p className="font-semibold">
+              {patient.ood_flag === 'OOD'
+                ? 'Out-of-distribution input — risk score may be unreliable'
+                : 'Borderline input — interpret risk score with caution'}
+            </p>
+            {patient.outlier_features.length > 0 && (
+              <p className="mt-0.5 text-xs opacity-80">
+                Outlier features: {patient.outlier_features.join(', ')}
+              </p>
+            )}
+          </div>
         </div>
       )}
 
