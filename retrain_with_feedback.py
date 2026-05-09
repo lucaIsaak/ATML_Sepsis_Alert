@@ -24,6 +24,36 @@ HOW IT WORKS
 6. If the new model is better (or --force is passed), back up the old
    model and save the new one to models/sepsis_model.pkl.
 
+SIGNAL QUALITY LIMITATION (ARCHITECTURAL NOTE)
+===============================================
+This script retrains on the *full* 93,224-patient MIMIC-IV dataset, with
+clinician feedback rows merely overriding a small number of labels (typically
+5–50 in a production deployment, even fewer in a demo).  At that ratio the
+per-feedback sample weight of 3.0 can nudge the loss function by only a tiny
+fraction — it is unlikely to measurably change the learned decision boundary,
+and the AUROC delta between old and new model will usually be noise.
+
+A more effective approach for future iterations:
+
+  Option A — Threshold calibration only
+      Keep the pre-trained model frozen.  Fit a Platt-scaling layer or
+      isotonic regression exclusively on the labelled feedback rows to
+      recalibrate the output probability.  Requires as few as ~20 labels.
+
+  Option B — Fine-tuning on feedback only
+      Hold the base model fixed and train a small meta-learner (logistic
+      regression over the top SHAP features) on feedback rows only.
+      This avoids catastrophic forgetting of the MIMIC-IV training signal.
+
+  Option C — Active learning queue
+      Surface the model's most uncertain predictions (risk ≈ 0.5) to
+      clinicians first, maximising label efficiency before triggering
+      a retrain.
+
+Until one of these strategies is adopted, AUROC comparisons after a
+feedback-driven retrain should be interpreted with caution — a stable
+(near-zero delta) result is expected and does not indicate model degradation.
+
 USAGE
 =====
     # Dry run — prints everything but does NOT overwrite the model
