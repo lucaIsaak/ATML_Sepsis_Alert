@@ -12,10 +12,14 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from src.api.routers.patients import _shap_cache, _risk_label
+from src.api.routers.patients import _shap_cache, _ood_cache, _risk_label
 from src.explainability.shap_explainer import SHAPExplanation, format_for_narrative
 from src.narrative.ollama_client import OllamaClient
 from src.data.narrative_feedback import load_few_shot_examples, find_similar_narratives
+from src.safety.guardrails import NarrativeGuard, AuditLogger, OODResult, NarrativeResult
+
+_audit_logger = AuditLogger(log_path="logs/audit.jsonl")
+_narrative_guard = NarrativeGuard()
 
 router = APIRouter()
 
@@ -117,10 +121,50 @@ async def stream_narrative(body: StreamRequest, request: Request):
     cfg_copy["narrative"]["ollama_model"] = model_name
 
     client = OllamaClient(cfg_copy)
+    shap_summary = format_for_narrative(explanation)
+
+    # Determine escalation tier for audit log
+    if risk_score >= 0.8:
+        tier = "CRITICAL"
+    elif risk_score >= 0.6:
+        tier = "DOCTOR"
+    elif risk_score >= 0.4:
+        tier = "NURSE"
+    else:
+        tier = "NONE"
+
+    # Build OODResult from cache (populated by patients router) or default NORMAL
+    cached_ood = _ood_cache.get(stay_id, {})
+    ood_result = OODResult(
+        is_ood=cached_ood.get("ood_flag") != "NORMAL",
+        n_outlier_features=len(cached_ood.get("outlier_features", [])),
+        outlier_features=cached_ood.get("outlier_features", []),
+        confidence_flag=cached_ood.get("ood_flag", "NORMAL"),
+    )
 
     def _generate():
-        for chunk in client.stream_alert(explanation, context):
-            yield chunk
+        # 1. Collect full LLM output (required for NarrativeGuard validation)
+        chunks = list(client.stream_alert(explanation, context))
+        full_text = "".join(chunks)
+
+        # 2. Validate with NarrativeGuard (Layer 2 safety)
+        nar_result = _narrative_guard.validate(full_text, shap_summary=shap_summary)
+
+        # 3. Audit log (Layer 3 — GDPR Art. 22 / EU AI Act)
+        _audit_logger.log_alert(
+            stay_id=str(stay_id),
+            risk_score=risk_score,
+            tier=tier,
+            top_features=[{"feature": f["feature"], "shap": f["shap"]} for f in top_features],
+            ood_result=ood_result,
+            narrative_result=nar_result,
+        )
+
+        # 4. Stream validated (or fallback) text in small chunks for typewriter effect
+        validated = nar_result.text
+        chunk_size = 8
+        for i in range(0, len(validated), chunk_size):
+            yield validated[i:i + chunk_size]
 
     return StreamingResponse(
         _generate(),

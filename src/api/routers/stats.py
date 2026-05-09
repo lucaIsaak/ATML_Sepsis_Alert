@@ -6,10 +6,14 @@ GET /stats — model performance metrics + ROC curve data
 
 from __future__ import annotations
 
+import sklearn
 import numpy as np
 from fastapi import APIRouter, Request
 
+from src.safety.guardrails import AuditLogger
+
 router = APIRouter()
+_audit_logger = AuditLogger(log_path="logs/audit.jsonl")
 
 # NEWS2 risk scores are simulated from known vital-sign weights
 # (this mirrors what the Streamlit dashboard does)
@@ -42,6 +46,27 @@ def _roc_curve_points(y_true, y_score, n_points: int = 100) -> list[dict]:
     return [{"fpr": float(fpr[i]), "tpr": float(tpr[i])} for i in indices]
 
 
+@router.get("/model/info")
+async def get_model_info(request: Request) -> dict:
+    """Return model metadata: algorithm, AUROC, feature count, sklearn version."""
+    artifact = request.app.state.artifact
+    return {
+        "algorithm":       "HistGradientBoostingClassifier",
+        "auroc":           float(artifact.get("auroc", 0.895)),
+        "feature_count":   len(artifact.get("feature_cols", [])),
+        "sklearn_version": sklearn.__version__,
+        "training_data":   "MIMIC-IV v3.1 — 93,224 ICU stays",
+        "label_strategy":  "Sepsis-3 ICD-10 proxy (A41.x / R65.2x)",
+        "tuning":          "Optuna Bayesian search — 50 trials, 5-fold CV",
+    }
+
+
+@router.get("/audit")
+async def get_audit_log(n: int = 50) -> list[dict]:
+    """Return the last n audit log entries (GDPR Art. 22 transparency endpoint)."""
+    return _audit_logger.read_recent(n=n)
+
+
 @router.get("/stats")
 async def get_stats(request: Request) -> dict:
     """Return model performance metrics and ROC curve data."""
@@ -71,14 +96,17 @@ async def get_stats(request: Request) -> dict:
     roc_sepsis = _roc_curve_points(y_true, y_score)
     roc_news2 = _roc_curve_points(y_true, news2_scores)
 
+    artifact = request.app.state.artifact
+    auroc = float(artifact.get("auroc", 0.895))
+
     return {
-        # Fixed published metrics (MIMIC-IV full cohort)
-        "auroc": 0.895,
+        # AUROC read from the actual trained artifact — updates after retrain
+        "auroc": auroc,
         "news2_auroc": 0.614,
         "auprc": 0.527,
         "total_stays": 93224,
         "sepsis_cases": 9890,
-        "features": 43,
+        "features": len(artifact.get("feature_cols", [])) or 43,
         # Dynamic ROC curves from the sampled predictions
         "roc_sepsis": roc_sepsis,
         "roc_news2": roc_news2,
