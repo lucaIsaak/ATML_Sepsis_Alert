@@ -13,9 +13,20 @@ from fastapi import APIRouter, HTTPException, Request
 
 router = APIRouter()
 
-# Module-level caches so SHAP is only computed once per patient per server start
+# Module-level caches so SHAP and OOD checks are only computed once per patient
 _shap_cache: dict[int, list[dict]] = {}
-_explainer = None  # lazily initialised on first SHAP request
+_ood_cache:  dict[int, dict] = {}       # stay_id → {flag, outlier_features}
+_explainer   = None   # lazily initialised on first SHAP request
+_input_guard = None   # lazily initialised on first OOD request
+
+
+def _get_input_guard(artifact: dict):
+    """Return (or build) the InputGuard for the loaded artifact."""
+    global _input_guard  # noqa: PLW0603
+    if _input_guard is None:
+        from src.safety.guardrails import InputGuard  # noqa: PLC0415
+        _input_guard = InputGuard.from_artifact(artifact)
+    return _input_guard
 
 
 def _get_explainer(artifact: dict, features_df: pd.DataFrame):
@@ -84,6 +95,20 @@ async def get_patient(stay_id: int, request: Request) -> dict:
     patient = _row_to_patient(pred_row.iloc[0])
     risk_score = patient["risk_score"]
 
+    # OOD / InputGuard check
+    if stay_id not in _ood_cache:
+        feat_row_ood = features_df[features_df["stay_id"] == stay_id]
+        if not feat_row_ood.empty:
+            guard = _get_input_guard(artifact)
+            feature_dict = feat_row_ood.iloc[0].to_dict()
+            ood_result = guard.check(feature_dict)
+            _ood_cache[stay_id] = {
+                "ood_flag":        ood_result.confidence_flag,
+                "outlier_features": ood_result.outlier_features,
+            }
+
+    ood_info = _ood_cache.get(stay_id, {"ood_flag": "NORMAL", "outlier_features": []})
+
     # SHAP computation
     if stay_id not in _shap_cache:
         # Feature values come from features_df, not predictions
@@ -123,6 +148,7 @@ async def get_patient(stay_id: int, request: Request) -> dict:
 
     return {
         **patient,
+        **ood_info,
         "shap_top":    [to_shap_dict(f) for f in sorted_desc[:16]],
         "shap_bottom": [to_shap_dict(f) for f in sorted_asc[:8]],
     }

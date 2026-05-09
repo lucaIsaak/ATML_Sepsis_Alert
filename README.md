@@ -18,40 +18,41 @@ Current tools (NEWS2, SIRS) are static, rule-based, and provide **no explanation
 ## Architecture
 
 ```
-MIMIC-IV / Hospital EHR
-         │
-    ┌────▼────┐
-    │  DuckDB  │   ← fast SQL directly on raw .csv.gz files
-    └────┬────┘
-         │  cohort + features (24h rolling windows, trend slopes)
-    ┌────▼──────────────────────────┐
-    │  HistGradientBoosting         │   ← trained on MIMIC-IV, Sepsis-3 labels
-    │  (sklearn, Optuna-tuned)      │   ← AUROC 0.895 vs NEWS2 0.614
-    └────┬──────────────────────────┘
-         │  risk score (0–1)
-    ┌────▼──────────────────────────┐
-    │  AI Safety Guardrails         │   ← OOD detection, narrative validation,
-    │  (src/safety/guardrails.py)   │      audit log (GDPR / EU AI Act)
-    └────┬──────────────────────────┘
-         │
-    ┌────▼──────┐
-    │   SHAP    │   ← top-5 feature drivers per patient
-    └────┬──────┘
-         │  feature importances + clinical reference ranges
-    ┌────▼─────────────────────────┐
-    │  Narrative Generator         │
-    │  Ollama / mistral:7b (local) │   ← on-premise, GDPR-safe
-    │  Claude API / HF fallback    │
-    └────┬─────────────────────────┘
-         │  SBAR-structured clinical explanation
-    ┌────▼──────────────────┐
-    │  PatientMonitorAgent  │   ← ReAct-pattern monitoring loop
-    │  4-tier escalation    │      NONE → NURSE → DOCTOR → CRITICAL
-    └────┬──────────────────┘
-         │
-    ┌────▼──────────┐
-    │   Streamlit   │   ← ICU dashboard, alerts, SHAP charts
-    └───────────────┘
+MIMIC-IV / Hospital EHR (FHIR R4)
+         |
+    +----v----+
+    |  DuckDB  |   <- fast SQL directly on raw .csv.gz files
+    +----+----+
+         |  cohort + features (24h rolling windows, trend slopes)
+    +----v-------------------------------+
+    |  HistGradientBoosting              |   <- trained on MIMIC-IV, Sepsis-3 labels
+    |  (sklearn, Optuna-tuned)           |   <- AUROC 0.895 vs NEWS2 0.614
+    +----+-------------------------------+
+         |  risk score (0-1)
+    +----v-------------------------------+
+    |  AI Safety Guardrails              |   <- OOD detection, narrative validation,
+    |  (src/safety/guardrails.py)        |      audit log (GDPR / EU AI Act)
+    +----+-------------------------------+
+         |
+    +----v------+
+    |   SHAP    |   <- top feature drivers per patient
+    +----+------+
+         |  feature importances + clinical reference ranges
+    +----v------------------------------+
+    |  Narrative Generator              |
+    |  Ollama / mistral:7b (local)      |   <- on-premise, GDPR-safe, streaming
+    |  Few-shot + RAG context           |   <- learns from clinician ratings
+    +----+------------------------------+
+         |  SBAR-structured clinical explanation
+    +----v---------------------+
+    |  PatientMonitorAgent     |   <- ReAct-pattern monitoring loop
+    |  4-tier escalation       |      NONE -> NURSE -> DOCTOR -> CRITICAL
+    +----+---------------------+
+         |
+    +----v-----------+    +----v------------------+
+    |   Streamlit    |    |  React + FastAPI       |
+    |   Dashboard    |    |  (src/api + frontend/) |
+    +----------------+    +-----------------------+
 ```
 
 ---
@@ -72,7 +73,7 @@ Escalation tiers:
 | NONE | risk < 0.40 | No alert |
 | NURSE | risk 0.40–0.59 | SBAR narrative to bedside nurse |
 | DOCTOR | risk 0.60–0.79 | Clinical summary to attending physician |
-| CRITICAL | risk ≥ 0.80 OR rapid deterioration | Immediate escalation |
+| CRITICAL | risk >= 0.80 OR rapid deterioration | Immediate escalation |
 
 Alert fatigue is addressed by a 2-hour suppression window and trend-based override (rapid deterioration escalates regardless of suppression).
 
@@ -80,13 +81,15 @@ Alert fatigue is addressed by a 2-hour suppression window and trend-based overri
 
 ## AI Safety — Three-Layer Guardrails
 
-Safety is built into every alert cycle (`src/safety/guardrails.py`):
+Safety is built into every alert cycle (`src/safety/guardrails.py`) and enforced across **both** the Streamlit and React/FastAPI interfaces:
 
 | Layer | What it does | Why |
 |---|---|---|
 | **InputGuard** | OOD detection via z-score against training distribution and hard physiological bounds. Flags `NORMAL / CAUTION / LOW_CONFIDENCE`. | Prevents silent model extrapolation on implausible inputs |
 | **NarrativeGuard** | Validates LLM output for prohibited phrases (confirmed diagnoses, definitive treatment orders). Replaces with deterministic SHAP fallback if violated. | Guarantees clinical safety even if Ollama misbehaves |
 | **AuditLogger** | Append-only JSONL log: timestamp, risk score, tier, OOD flag, narrative replacement flag. | GDPR Art. 22 (automated decision transparency) + EU AI Act Annex III |
+
+All three layers are wired into the FastAPI routers as well as the Streamlit dashboard — no guardrail is bypassed regardless of which frontend is used. The audit log is accessible via `GET /audit`.
 
 See `MODEL_CARD.md` for full safety documentation.
 
@@ -115,7 +118,7 @@ Labels use the **Sepsis-3 ICD-10 proxy** from `diagnoses_icd`:
 
 ---
 
-## Features (24h Rolling Windows — 55 total)
+## Features (24h Rolling Windows — 43 total)
 
 **Vitals** (from chartevents): Heart Rate, MAP, Respiratory Rate, Temperature, SpO2
 — each with: mean, min, max, last, **trend** (linear slope, units/hour)
@@ -133,7 +136,7 @@ Trend features capture whether a marker is stable, rising, or falling — rising
 
 - **Algorithm**: `sklearn.HistGradientBoostingClassifier` — pure Python, no native deps, natively handles NaN
 - **Hyperparameters**: tuned with Optuna Bayesian optimisation (50-trial search, 5-fold stratified CV)
-- **Training data**: MIMIC-IV ICU cohort — 93,224 stays, adults, ICU LOS ≥ 6h
+- **Training data**: MIMIC-IV ICU cohort — 93,224 stays, adults, ICU LOS >= 6h
 - **Performance**: AUROC **0.895** vs NEWS2 baseline **0.614** (+0.281)
 - **Calibration**: Brier score reported by `src/model/evaluate.py`
 - **Fairness**: subgroup AUROC by gender and age quartile reported at evaluation
@@ -144,24 +147,38 @@ See `MODEL_CARD.md` for full model documentation.
 
 ## Clinician Feedback Loop
 
-SepsisAlert includes a lightweight active-learning loop that lets clinicians label patients directly from the dashboard and feed those labels back into the next model training cycle.
+SepsisAlert includes a full active-learning loop: clinicians label patients from the dashboard, ratings improve future narratives via RAG and few-shot prompting, and labels feed back into model retraining.
 
-### How it works
-
-**1. Labelling in the dashboard**
+### 1. Clinical alert feedback (confirm / flag)
 
 On the Patient Detail page, two buttons appear above the risk gauge for every patient:
 
 | Button | Meaning | Stored as |
 |---|---|---|
-| ✅ Confirm Sepsis | Clinician verifies this patient did develop sepsis | `confirmed_sepsis` |
-| 🚩 Flag as Wrong | Alert fired but clinician believes it was a false positive | `flagged_wrong` |
+| Confirm Sepsis | Clinician verifies this patient did develop sepsis | `confirmed_sepsis` |
+| Flag as Wrong | Alert fired but clinician believes it was a false positive | `flagged_wrong` |
 
-Labels are saved immediately to `data/feedback/feedback.csv` (gitignored). A clinician can always click again to update a previous decision — each patient has exactly one label at any time.
+Labels are saved immediately to `logs/feedback.jsonl`. A clinician can always click again to update.
 
-**Why no "Rule Out Sepsis" button?** Because absence of a diagnosis does not equal absence of disease — the patient may have developed sepsis after discharge, or the alert may have prompted early intervention that prevented it. Only `confirmed_sepsis` is a clean ground-truth label. `flagged_wrong` is treated as a provisional negative with reduced weight.
+### 2. Narrative quality feedback
 
-**2. Retraining with feedback**
+After each LLM-generated narrative, the clinician can:
+- Rate it 1–5 stars
+- Add a free-text correction note
+- Record a voice note (transcribed locally by OpenAI Whisper — no cloud call)
+
+Ratings are saved to `logs/narrative_feedback.jsonl` with the full SHAP vector, narrative text, and model name.
+
+### 3. Few-shot + RAG narrative improvement
+
+Every time a new narrative is requested, the system automatically:
+
+- **Few-shot**: retrieves the 2 highest-rated past narratives (>= 4 stars, same model) as style anchors
+- **RAG**: finds the most clinically similar past patient by cosine similarity on SHAP vectors, and uses their narrative as a content anchor
+
+This means narrative quality improves continuously with use, without any retraining.
+
+### 4. Feedback-driven model retraining
 
 ```bash
 # See what would happen without writing any files
@@ -174,7 +191,7 @@ python retrain_with_feedback.py
 python retrain_with_feedback.py --force
 ```
 
-The script (`retrain_with_feedback.py`):
+The script:
 - Loads the original feature matrix and overrides labels for all clinician-labelled patients
 - Applies differential sample weights so clinician labels are trusted more than automated ones:
 
@@ -187,31 +204,51 @@ The script (`retrain_with_feedback.py`):
 - Trains a new model using the same hyperparameters from `config.yaml`
 - Compares old vs. new AUROC on the same validation split
 - Only overwrites `models/sepsis_model.pkl` if the new model is better
-- Always creates a timestamped backup (`models/sepsis_model_backup_<ts>.pkl`) before saving
+- Always creates a timestamped backup before saving
 
-**3. Feedback data structure**
+### 5. LoRA narrative fine-tuning (optional)
 
-`data/feedback/feedback.csv`:
+Once >= 5 high-rated narratives have been collected, the feedback can be exported as Alpaca-format JSONL and used to fine-tune the Ollama model via LoRA:
 
-| Column | Example | Description |
-|---|---|---|
-| `stay_id` | `30002932` | ICU stay identifier |
-| `feedback_type` | `confirmed_sepsis` | Clinician decision |
-| `risk_score` | `0.914` | Model score at time of labelling |
-| `timestamp` | `2026-05-07T14:32:10` | When the label was given |
-| `low_confidence` | `False` | True for `flagged_wrong` entries |
-
-The feedback CSV is gitignored alongside all other patient data.
+```bash
+python finetune_narrative.py --export-only   # just export the training pairs
+python finetune_narrative.py                 # export + train + load into Ollama
+```
 
 ---
 
 ## Narrative Layer
 
 - **Primary**: Ollama `mistral:7b` running **locally** — no data leaves the machine
-- **Fallback 1**: Claude API (non-sensitive / demo environments only)
-- **Fallback 2**: HuggingFace `epfl-llm/meditron-7b`
+- **Streaming**: narratives stream token-by-token to the dashboard (typewriter effect)
+- **Dynamic model selector**: switch between any locally installed Ollama model from the dashboard
+- **Few-shot + RAG**: past clinician-rated narratives are surfaced as context examples
+- **Audio feedback**: voice notes transcribed by local Whisper (no cloud call)
+- **Fallback**: deterministic SHAP-based summary if NarrativeGuard blocks the LLM output
 
-Prompts are SBAR-structured and grounded in SHAP output only. The `NarrativeGuard` validates every output before it reaches the clinician. The LLM **cannot** override the model score.
+Prompts are SBAR-structured and grounded in SHAP output only. The LLM **cannot** override the model score.
+
+---
+
+## REST API (FastAPI backend)
+
+The full stack includes a FastAPI backend alongside the Streamlit dashboard. It serves the React frontend and exposes all model capabilities programmatically.
+
+```
+GET  /patients                  — list all sampled patients, sorted by risk score
+GET  /patients/{stay_id}        — patient detail: risk score, SHAP top/bottom, OOD flag
+POST /narrative/stream          — stream SBAR narrative for a patient
+GET  /narrative/models          — list available Ollama models
+POST /feedback/clinical         — save confirm / flag decision
+GET  /feedback/clinical/{id}    — retrieve existing clinical feedback
+POST /feedback/narrative        — save narrative star rating + correction note
+POST /feedback/transcribe       — transcribe audio feedback via Whisper
+GET  /stats                     — model performance metrics + ROC curve data
+GET  /model/info                — algorithm, AUROC, feature count, sklearn version
+GET  /audit                     — last N audit log entries (GDPR Art. 22)
+```
+
+All narrative requests pass through NarrativeGuard and AuditLogger before the response is returned.
 
 ---
 
@@ -221,47 +258,62 @@ Prompts are SBAR-structured and grounded in SHAP output only. The `NarrativeGuar
 ATML_Sepsis_Alert/
 ├── src/
 │   ├── data/
-│   │   ├── cohort.py           # DuckDB cohort extraction (MIMIC-IV)
-│   │   ├── features.py         # Feature engineering (24h rolling windows + trends)
-│   │   ├── feedback.py         # Clinician feedback store + retraining label bridge
-│   │   ├── patient_buffer.py   # Streaming per-patient rolling buffer
-│   │   └── streaming.py        # MIMIC stream simulator (FHIR-compatible)
+│   │   ├── cohort.py               # DuckDB cohort extraction (MIMIC-IV)
+│   │   ├── features.py             # Feature engineering (24h rolling windows + trends)
+│   │   ├── feedback.py             # Clinical feedback store + retraining label bridge
+│   │   ├── narrative_feedback.py   # Narrative ratings, few-shot + RAG retrieval
+│   │   ├── patient_buffer.py       # Streaming per-patient rolling buffer
+│   │   └── streaming.py            # MIMIC stream simulator (FHIR-compatible)
 │   ├── model/
-│   │   ├── train.py            # Model training (HistGradientBoosting)
-│   │   ├── tune.py             # Optuna hyperparameter search
-│   │   ├── evaluate.py         # AUROC, Brier, clinical thresholds, subgroup fairness
-│   │   └── predict.py          # Single-patient and batch inference
+│   │   ├── train.py                # Model training (HistGradientBoosting)
+│   │   ├── tune.py                 # Optuna hyperparameter search
+│   │   ├── evaluate.py             # AUROC, Brier, clinical thresholds, subgroup fairness
+│   │   └── predict.py              # Single-patient and batch inference
 │   ├── explainability/
-│   │   └── shap_explainer.py   # SHAP wrapper + feature label/unit mapping
+│   │   └── shap_explainer.py       # SHAP wrapper + feature label/unit mapping
 │   ├── narrative/
-│   │   ├── ollama_client.py    # Ollama narrative generation (nurse + doctor)
-│   │   └── prompts.py          # SBAR prompt templates + clinical thresholds
+│   │   ├── ollama_client.py        # Ollama narrative generation + streaming
+│   │   ├── prompts.py              # SBAR prompt templates + clinical thresholds
+│   │   └── transcribe.py           # Local Whisper audio transcription
 │   ├── safety/
-│   │   └── guardrails.py       # InputGuard, NarrativeGuard, AuditLogger
+│   │   └── guardrails.py           # InputGuard, NarrativeGuard, AuditLogger
 │   ├── agent/
-│   │   └── monitor_agent.py    # PatientMonitorAgent (ReAct loop)
+│   │   └── monitor_agent.py        # PatientMonitorAgent (ReAct loop)
 │   ├── integrations/
-│   │   └── fhir_adapter.py     # HL7 FHIR R4 adapter (Epic / Cerner)
+│   │   └── fhir_adapter.py         # HL7 FHIR R4 adapter (Epic / Cerner)
+│   ├── api/
+│   │   ├── main.py                 # FastAPI app + lifespan loader
+│   │   └── routers/
+│   │       ├── patients.py         # GET /patients, GET /patients/{id}
+│   │       ├── narrative.py        # POST /narrative/stream, GET /narrative/models
+│   │       ├── feedback.py         # POST/GET /feedback/clinical, narrative, transcribe
+│   │       └── stats.py            # GET /stats, /model/info, /audit
 │   ├── app/
-│   │   └── dashboard.py        # Streamlit ICU dashboard
-│   └── schemas.py              # Pydantic input/output schemas
+│   │   └── dashboard.py            # Streamlit ICU dashboard (shadcn UI)
+│   └── schemas.py                  # Pydantic input/output schemas (FHIR + clinical)
+├── frontend/                       # React + Vite + Tailwind + Radix UI
+│   ├── src/
+│   │   ├── components/             # PatientList, PatientDetail, Stats panels
+│   │   └── lib/utils.ts            # shadcn/ui cn() utility
+│   └── package.json
 ├── tests/
-│   ├── test_model.py           # Inference correctness
-│   ├── test_schemas.py         # Clinical validation rules
-│   ├── test_narrative.py       # Prompt structure + LLM client
-│   └── test_safety.py          # Guardrails (22 tests)
+│   ├── test_model.py               # Inference correctness
+│   ├── test_schemas.py             # Clinical validation rules
+│   ├── test_narrative.py           # Prompt structure + LLM client
+│   └── test_safety.py              # Guardrails (22 tests)
 ├── notebooks/
-│   ├── 01_eda.ipynb            # Cohort exploration
-│   └── 02_feature_analysis.ipynb # Feature importance (permutation)
-├── models/                     # Model artifacts (gitignored)
-├── data/                       # Processed data (gitignored)
-├── logs/                       # Audit logs (gitignored)
-├── setup_demo.py               # One-command demo setup (synthetic data, no MIMIC needed)
-├── run_pipeline.py             # Full MIMIC-IV pipeline runner
-├── retrain_with_feedback.py    # Feedback-driven retraining (run manually after labelling)
-├── config.yaml                 # Model + app configuration
-├── MODEL_CARD.md               # Model documentation (EU AI Act Annex IV)
-├── TRANSPARENCY_LOG.md         # GenAI tool usage disclosure
+│   ├── 01_eda.ipynb                # Cohort exploration
+│   └── 02_feature_analysis.ipynb   # Feature importance (permutation)
+├── models/                         # Model artifacts (gitignored for demo; commit real pkl)
+├── data/                           # Processed data (gitignored)
+├── logs/                           # Audit + feedback logs (gitignored)
+├── setup_demo.py                   # One-command demo setup (synthetic data, no MIMIC needed)
+├── run_pipeline.py                 # Full MIMIC-IV pipeline runner
+├── retrain_with_feedback.py        # Feedback-driven model retraining
+├── finetune_narrative.py           # LoRA narrative fine-tuning pipeline
+├── config.yaml                     # Model + app configuration
+├── MODEL_CARD.md                   # Model documentation (EU AI Act Annex IV)
+├── TRANSPARENCY_LOG.md             # GenAI tool usage disclosure
 ├── requirements.txt
 └── .env.example
 ```
@@ -277,8 +329,12 @@ ATML_Sepsis_Alert/
 | Explainability | SHAP | Industry standard, directly interpretable |
 | AI Safety | Custom guardrails | OOD detection, narrative validation, audit log |
 | Narrative LLM | Ollama / mistral:7b | On-premise, GDPR-compliant, zero per-call cost |
+| Narrative improvement | Few-shot + RAG (cosine SHAP similarity) | Quality improves with use, no retraining required |
+| Audio feedback | OpenAI Whisper (local) | Voice correction notes, no cloud call |
 | EHR integration | HL7 FHIR R4 adapter | Compatible with Epic / Oracle Health (Cerner) |
-| Frontend | Streamlit | Fast to build, clinical dashboard-friendly |
+| Streamlit frontend | Streamlit + streamlit-shadcn-ui | Polished clinical dashboard with metric cards and badges |
+| React frontend | React + Vite + TypeScript + Tailwind + Radix UI | Modern SPA, proxies to FastAPI backend |
+| Backend API | FastAPI + uvicorn | REST API serving React frontend + programmatic access |
 | Agent pattern | ReAct (custom Python) | Reason + Act loop, 4-tier escalation, trend memory |
 | Validation | Pydantic v2 | Clinical bounds enforced at schema level |
 | Testing | pytest (22+ tests) | Model, schemas, narrative, safety guardrails |
@@ -310,34 +366,21 @@ git clone <repo>
 cd ATML_Sepsis_Alert
 pip install -r requirements.txt
 
-# Generate synthetic demo data + train demo model (~10 seconds)
+# Generate synthetic demo data + reuse real model if present, else train demo (~10s)
 python setup_demo.py
 
-# Launch the dashboard
+# Option A — Streamlit dashboard
 streamlit run src/app/dashboard.py
-```
 
-`setup_demo.py` generates 200 fully synthetic ICU patients (no real patient data — see legal notice in the script) and trains a demo model. The dashboard is immediately usable.
-
-### React Frontend (alternative UI)
-
-A modern React dashboard is available alongside the Streamlit app.
-
-**Install dependencies (first time only):**
-```bash
-cd frontend && npm install
-```
-
-**Run the full stack:**
-```bash
-# Terminal 1 — FastAPI backend
+# Option B — React frontend + FastAPI backend
+# Terminal 1
 uvicorn src.api.main:app --reload --port 8000
-
-# Terminal 2 — React frontend
-cd frontend && npm run dev
+# Terminal 2
+cd frontend && npm install && npm run dev
+# Open http://localhost:5173
 ```
 
-The React app runs on [http://localhost:5173](http://localhost:5173) and proxies API calls to the backend on port 8000. Make sure `setup_demo.py` has been run first so the model and data files exist.
+`setup_demo.py` generates 200 fully synthetic ICU patients (no real patient data) and reuses a real trained model if `models/sepsis_model.pkl` exists, otherwise trains a demo model on synthetic data.
 
 ---
 
@@ -348,7 +391,7 @@ pip install -r requirements.txt
 
 # Configure data paths
 cp .env.example .env
-# Edit config.yaml → set icu_path and hosp_path to your MIMIC-IV location
+# Edit config.yaml -> set icu_path and hosp_path to your MIMIC-IV location
 
 # Run full pipeline
 python run_pipeline.py

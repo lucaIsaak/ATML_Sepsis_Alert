@@ -104,7 +104,7 @@ async def save_narrative_fb(body: NarrativeFeedbackRequest, request: Request):
         narrative_text=body.narrative_text,
         shap_summary=shap_summary,
         model_used=body.model_used,
-        shap_vector=shap_vector if shap_vector else None,
+        shap_vector=shap_vector,
     )
     return {"status": "saved"}
 

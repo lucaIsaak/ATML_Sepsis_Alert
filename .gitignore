@@ -217,9 +217,9 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# Data
+# Data (root-level only — does NOT affect src/data/)
 physionet.org/
-data/
+/data/
 
 # Environment
 .venv/
