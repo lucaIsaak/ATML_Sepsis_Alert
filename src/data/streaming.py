@@ -181,12 +181,19 @@ class MIMICStreamSimulator:
             for _, row in bucket.iterrows():
                 if pd.isna(row["item_name"]) or np.isnan(row["value"]):
                     continue
+                # Route to correct stream type based on event source
+                from src.data.patient_buffer import StreamType  # noqa: PLC0415
+                stream_type = (
+                    StreamType.STREAMING if row["event_type"] == "vital"
+                    else StreamType.BATCH
+                )
                 obs = Observation(
                     timestamp=row["event_time"].to_pydatetime(),
                     item_name=row["item_name"],
                     value=float(row["value"]),
                     source=row["event_type"],
                     tier=int(row["tier"]),
+                    stream_type=stream_type,
                 )
                 obs.stay_id  = str(int(row["stay_id"]))  # attach stay_id for routing
                 obs.sepsis_label = int(row["sepsis_label"])

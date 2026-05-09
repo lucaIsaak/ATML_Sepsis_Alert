@@ -11,6 +11,9 @@ import numpy as np
 from fastapi import APIRouter, Request
 
 from src.safety.guardrails import AuditLogger
+from src.agent.feedback_agent import FeedbackLoopAgent
+
+_feedback_agent = FeedbackLoopAgent()
 
 router = APIRouter()
 _audit_logger = AuditLogger(log_path="logs/audit.jsonl")
@@ -65,6 +68,19 @@ async def get_model_info(request: Request) -> dict:
 async def get_audit_log(n: int = 50) -> list[dict]:
     """Return the last n audit log entries (GDPR Art. 22 transparency endpoint)."""
     return _audit_logger.read_recent(n=n)
+
+
+@router.get("/feedback-agent/status")
+async def get_feedback_agent_status() -> dict:
+    """
+    Run the FeedbackLoopAgent and return its current decision.
+
+    Decision values: "WAIT" | "FLAG" | "RETRAIN"
+    Called by the Model Performance page to display the agent status card.
+    This endpoint reads fresh from the log files on every call — no caching.
+    """
+    decision = _feedback_agent.evaluate()
+    return decision.to_dict()
 
 
 @router.get("/stats")

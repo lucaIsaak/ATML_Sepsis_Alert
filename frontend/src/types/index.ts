@@ -34,3 +34,19 @@ export interface ModelStats {
   roc_sepsis: Array<{ fpr: number; tpr: number }>
   roc_news2: Array<{ fpr: number; tpr: number }>
 }
+
+export interface FeedbackAgentStatus {
+  decision: 'WAIT' | 'FLAG' | 'RETRAIN'
+  reason: string
+  evaluated_at: string
+  clinical_total: number
+  confirmed_sepsis: number
+  flagged_wrong: number
+  fp_rate: number | null
+  narrative_total: number
+  mean_rating: number | null
+  std_rating: number | null
+  low_rated_pct: number | null
+  correction_notes: string[]
+  details: Record<string, unknown>
+}

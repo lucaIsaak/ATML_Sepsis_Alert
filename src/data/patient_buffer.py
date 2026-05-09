@@ -9,6 +9,15 @@ This is the bridge between batch (MIMIC training) and streaming (production):
   - Training: replay historical MIMIC events through the buffer
   - Production: push incoming FHIR Observations into the buffer
 
+Two explicit ingestion streams:
+  STREAMING — vitals (heart rate, MAP, SpO2, resp. rate, temperature)
+              arrive continuously from bedside monitoring devices.
+              Update frequency: every few seconds to minutes.
+
+  BATCH     — labs (lactate, WBC, creatinine, etc.) arrive once when
+              a blood draw is processed by the lab.
+              Update frequency: once or twice per day.
+
 Two tiers of features:
   Tier 1 — Always available (model works without these missing)
             Vitals (HR, MAP, SpO2, RR, Temp) + Daily BMP/CBC
@@ -21,6 +30,7 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from enum import Enum
 from typing import Optional
 
 import numpy as np
@@ -64,6 +74,87 @@ TIER2_LAB_ITEMS = {
 ALL_VITAL_ITEMS = {**TIER1_VITAL_ITEMS}
 ALL_LAB_ITEMS   = {**TIER1_LAB_ITEMS, **TIER2_LAB_ITEMS}
 
+# Which item names belong to each stream
+VITAL_NAMES = set(ALL_VITAL_ITEMS.values())
+LAB_NAMES   = set(ALL_LAB_ITEMS.values())
+
+# ------------------------------------------------------------------ #
+# Clinical threshold definitions                                        #
+# Based on Sepsis-3 criteria and standard ICU reference ranges         #
+# ------------------------------------------------------------------ #
+
+VITAL_THRESHOLDS: dict[str, list[dict]] = {
+    "map": [
+        {"threshold": 65.0,  "direction": "below", "severity": "critical",
+         "message": "MAP {value:.0f} mmHg — below Sepsis-3 threshold (65 mmHg)"},
+        {"threshold": 70.0,  "direction": "below", "severity": "warning",
+         "message": "MAP {value:.0f} mmHg — approaching hypotension threshold"},
+    ],
+    "heart_rate": [
+        {"threshold": 130.0, "direction": "above", "severity": "critical",
+         "message": "HR {value:.0f} bpm — severe tachycardia"},
+        {"threshold": 100.0, "direction": "above", "severity": "warning",
+         "message": "HR {value:.0f} bpm — tachycardia"},
+    ],
+    "spo2": [
+        {"threshold": 90.0,  "direction": "below", "severity": "critical",
+         "message": "SpO2 {value:.0f}% — severe hypoxia"},
+        {"threshold": 94.0,  "direction": "below", "severity": "warning",
+         "message": "SpO2 {value:.0f}% — below normal range"},
+    ],
+    "resp_rate": [
+        {"threshold": 30.0,  "direction": "above", "severity": "critical",
+         "message": "RR {value:.0f}/min — severe tachypnea"},
+        {"threshold": 22.0,  "direction": "above", "severity": "warning",
+         "message": "RR {value:.0f}/min — tachypnea (Sepsis-3 criterion)"},
+    ],
+    "temperature_f": [
+        {"threshold": 100.4, "direction": "above", "severity": "warning",
+         "message": "Temp {value:.1f}°F — fever"},
+        {"threshold": 96.8,  "direction": "below", "severity": "warning",
+         "message": "Temp {value:.1f}°F — hypothermia"},
+    ],
+}
+
+
+# ------------------------------------------------------------------ #
+# Vital threshold alert                                                 #
+# ------------------------------------------------------------------ #
+
+@dataclass
+class VitalThresholdAlert:
+    """A single clinical threshold violation detected in raw vital data."""
+
+    vital: str          # e.g. "map", "heart_rate"
+    value: float        # current value
+    threshold: float    # the threshold that was crossed
+    direction: str      # "below" | "above"
+    severity: str       # "warning" | "critical"
+    message: str        # human-readable description
+
+
+# ------------------------------------------------------------------ #
+# Stream type                                                          #
+# ------------------------------------------------------------------ #
+
+class StreamType(Enum):
+    """
+    Ingestion stream for an observation.
+
+    STREAMING — continuous feed from bedside monitoring devices.
+                Vitals only. Update every seconds to minutes.
+
+    BATCH     — periodic batch from the hospital lab system.
+                Labs only. Update once or twice per day when a
+                blood draw is processed.
+    """
+    STREAMING = "streaming"
+    BATCH     = "batch"
+
+
+# ------------------------------------------------------------------ #
+# Observation                                                          #
+# ------------------------------------------------------------------ #
 
 @dataclass
 class Observation:
@@ -74,7 +165,12 @@ class Observation:
     value: float
     source: str = "icu"     # "icu" (chartevents) | "lab" (labevents) | "fhir"
     tier: int = 1           # 1 = always available, 2 = conditional
+    stream_type: StreamType = StreamType.STREAMING  # STREAMING | BATCH
 
+
+# ------------------------------------------------------------------ #
+# PatientBuffer                                                        #
+# ------------------------------------------------------------------ #
 
 @dataclass
 class PatientBuffer:
@@ -83,7 +179,9 @@ class PatientBuffer:
 
     Usage:
         buf = PatientBuffer(stay_id="39553978", window_hours=24)
-        buf.add(Observation(timestamp=..., item_name="heart_rate", value=95))
+        buf.add_vital(Observation(timestamp=..., item_name="heart_rate", value=95))
+        buf.add_lab(Observation(timestamp=..., item_name="lactate", value=2.1,
+                                stream_type=StreamType.BATCH))
         features = buf.extract_features()
         # → dict ready for model.predict_patient()
     """
@@ -98,6 +196,30 @@ class PatientBuffer:
     alert_count: int = 0
     acknowledged: bool = False
 
+    # ---------------------------------------------------------------- #
+    # Ingestion — typed by stream                                        #
+    # ---------------------------------------------------------------- #
+
+    def add_vital(self, obs: Observation) -> None:
+        """
+        Add a streaming vital observation (heart rate, MAP, SpO2, etc.).
+
+        Called on every update from the bedside monitor feed.
+        Automatically sets stream_type to STREAMING.
+        """
+        obs.stream_type = StreamType.STREAMING
+        self.add(obs)
+
+    def add_lab(self, obs: Observation) -> None:
+        """
+        Add a batch lab result (lactate, WBC, creatinine, etc.).
+
+        Called once when the hospital lab system reports a new result.
+        Automatically sets stream_type to BATCH.
+        """
+        obs.stream_type = StreamType.BATCH
+        self.add(obs)
+
     def add(self, obs: Observation) -> None:
         """Add a new observation and prune old ones outside the window."""
         self.observations.append(obs)
@@ -109,6 +231,10 @@ class PatientBuffer:
             self.observations.append(obs)
         self._prune()
 
+    # ---------------------------------------------------------------- #
+    # Internal                                                           #
+    # ---------------------------------------------------------------- #
+
     def _prune(self) -> None:
         """Remove observations older than window_hours."""
         if not self.observations:
@@ -117,6 +243,10 @@ class PatientBuffer:
         cutoff = latest - timedelta(hours=self.window_hours)
         while self.observations and self.observations[0].timestamp < cutoff:
             self.observations.popleft()
+
+    # ---------------------------------------------------------------- #
+    # Feature extraction                                                 #
+    # ---------------------------------------------------------------- #
 
     def extract_features(self) -> dict[str, float]:
         """
@@ -198,6 +328,144 @@ class PatientBuffer:
         self._prune()
         return all_features
 
+    # ---------------------------------------------------------------- #
+    # Stream-aware queries                                               #
+    # ---------------------------------------------------------------- #
+
+    def get_streaming_vitals(self) -> list[Observation]:
+        """Return all current streaming (vital) observations in the window."""
+        return [o for o in self.observations if o.stream_type == StreamType.STREAMING]
+
+    def get_batch_labs(self) -> list[Observation]:
+        """Return all current batch (lab) observations in the window."""
+        return [o for o in self.observations if o.stream_type == StreamType.BATCH]
+
+    def last_lab_time(self) -> Optional[datetime]:
+        """Return timestamp of the most recent lab result, or None."""
+        labs = self.get_batch_labs()
+        if not labs:
+            return None
+        return max(o.timestamp for o in labs)
+
+    def hours_since_last_lab(self) -> Optional[float]:
+        """Return hours since the last lab result, or None if no labs yet."""
+        t = self.last_lab_time()
+        if t is None:
+            return None
+        latest = max(o.timestamp for o in self.observations)
+        return (latest - t).total_seconds() / 3600
+
+    # ---------------------------------------------------------------- #
+    # Raw vital trend tracking                                           #
+    # ---------------------------------------------------------------- #
+
+    def get_vital_trajectory(
+        self, vital_name: str, hours: float = 4.0
+    ) -> list[tuple[datetime, float]]:
+        """
+        Return the raw time-series for a vital over the last N hours.
+
+        Returns a list of (timestamp, value) tuples sorted oldest→newest.
+        Used by the narrative agent to reason about trajectory shape,
+        not just the aggregated slope.
+
+        Example:
+            trajectory = buf.get_vital_trajectory("map", hours=6)
+            # → [(t0, 78), (t1, 72), (t2, 65), (t3, 61)]
+            # Shows MAP declining steadily over 6 hours
+        """
+        if not self.observations:
+            return []
+        latest = max(o.timestamp for o in self.observations)
+        cutoff = latest - timedelta(hours=hours)
+        points = [
+            (o.timestamp, o.value)
+            for o in self.observations
+            if o.item_name == vital_name
+            and o.timestamp >= cutoff
+            and not np.isnan(o.value)
+        ]
+        return sorted(points, key=lambda x: x[0])
+
+    def get_sustained_direction(
+        self,
+        vital_name: str,
+        hours: float = 4.0,
+        min_points: int = 3,
+    ) -> Optional[str]:
+        """
+        Detect if a vital has been moving consistently in one direction.
+
+        Returns:
+            "rising"  — every consecutive pair is higher than the last
+            "falling" — every consecutive pair is lower than the last
+            None      — mixed / insufficient data
+
+        This catches clinical patterns the ML model misses, e.g.:
+          MAP 72 → 68 → 64 → 61 over 4h (steadily falling, not yet critical)
+          while the overall trend slope looks mild.
+        """
+        trajectory = self.get_vital_trajectory(vital_name, hours)
+        if len(trajectory) < min_points:
+            return None
+
+        values = [v for _, v in trajectory]
+        diffs = [values[i + 1] - values[i] for i in range(len(values) - 1)]
+
+        if all(d > 0 for d in diffs):
+            return "rising"
+        if all(d < 0 for d in diffs):
+            return "falling"
+        return None
+
+    def check_vital_thresholds(self) -> list[VitalThresholdAlert]:
+        """
+        Check the most recent value for each vital against clinical thresholds.
+
+        Returns a list of VitalThresholdAlert for every violated threshold,
+        sorted by severity (critical first).
+
+        Called by the narrative agent to enrich alerts with raw vital context
+        even when the ML risk score is only MODERATE.
+
+        Example output:
+            [VitalThresholdAlert(vital='map', value=62.0, threshold=65.0,
+                                 direction='below', severity='critical',
+                                 message='MAP 62 mmHg — below Sepsis-3 threshold')]
+        """
+        alerts: list[VitalThresholdAlert] = []
+
+        for vital_name, thresholds in VITAL_THRESHOLDS.items():
+            trajectory = self.get_vital_trajectory(vital_name, hours=self.window_hours)
+            if not trajectory:
+                continue
+            current_value = trajectory[-1][1]  # most recent reading
+
+            for spec in thresholds:
+                violated = (
+                    (spec["direction"] == "below" and current_value < spec["threshold"])
+                    or
+                    (spec["direction"] == "above" and current_value > spec["threshold"])
+                )
+                if violated:
+                    alerts.append(VitalThresholdAlert(
+                        vital=vital_name,
+                        value=current_value,
+                        threshold=spec["threshold"],
+                        direction=spec["direction"],
+                        severity=spec["severity"],
+                        message=spec["message"].format(value=current_value),
+                    ))
+                    break  # only report the most severe violation per vital
+
+        # Critical alerts first
+        alerts.sort(key=lambda a: 0 if a.severity == "critical" else 1)
+        return alerts
+
+    # ---------------------------------------------------------------- #
+    # Properties                                                         #
+    # ---------------------------------------------------------------- #
+
     @property
     def n_observations(self) -> int:
         """Return total number of observations in the buffer."""
@@ -218,6 +486,10 @@ class PatientBuffer:
         times = [o.timestamp for o in self.observations]
         return (max(times) - min(times)).total_seconds() / 3600
 
+
+# ------------------------------------------------------------------ #
+# BufferRegistry                                                        #
+# ------------------------------------------------------------------ #
 
 class BufferRegistry:
     """
@@ -241,10 +513,48 @@ class BufferRegistry:
             )
         return self._buffers[stay_id]
 
-    def push(self, stay_id: str, obs: Observation) -> None:
-        """Route a single observation into the correct patient buffer."""
+    # ---------------------------------------------------------------- #
+    # Typed push methods — use these in production                       #
+    # ---------------------------------------------------------------- #
+
+    def push_vital(self, stay_id: str, obs: Observation) -> None:
+        """
+        Route a streaming vital observation into the correct patient buffer.
+
+        Call this when a new heart rate, MAP, SpO2, etc. arrives from
+        the bedside monitor feed.
+        """
         buf = self.get_or_create(stay_id)
-        buf.add(obs)
+        buf.add_vital(obs)
+
+    def push_lab(self, stay_id: str, obs: Observation) -> None:
+        """
+        Route a batch lab result into the correct patient buffer.
+
+        Call this when the hospital lab system reports a new blood result.
+        """
+        buf = self.get_or_create(stay_id)
+        buf.add_lab(obs)
+
+    def push(self, stay_id: str, obs: Observation) -> None:
+        """
+        Generic push — routes by item name automatically.
+
+        Prefer push_vital() / push_lab() when the source is known.
+        Falls back to name-based routing for backward compatibility.
+        """
+        if obs.item_name in VITAL_NAMES:
+            self.push_vital(stay_id, obs)
+        elif obs.item_name in LAB_NAMES:
+            self.push_lab(stay_id, obs)
+        else:
+            # Unknown item — add as-is
+            buf = self.get_or_create(stay_id)
+            buf.add(obs)
+
+    # ---------------------------------------------------------------- #
+    # Queries                                                            #
+    # ---------------------------------------------------------------- #
 
     def get_buffer(self, stay_id: str) -> Optional[PatientBuffer]:
         """Return the buffer for stay_id, or None if not found."""
