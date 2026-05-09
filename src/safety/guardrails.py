@@ -318,6 +318,42 @@ class AuditLogger:
         with open(self.log_path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(record) + "\n")
 
+    def log_prediction(
+        self,
+        stay_id: str,
+        risk_score: float,
+        risk_tier: str,
+        ood_flag: str,
+        outlier_features: list[str],
+        top_features: list[dict],
+        timestamp: Optional[datetime] = None,
+    ) -> None:
+        """
+        Lightweight audit entry for a model prediction (no narrative required).
+
+        Used by the REST API when a patient detail is fetched — ensures every
+        prediction served to a clinician leaves an audit trail even without the
+        full PatientMonitorAgent pipeline running.
+        """
+        record = {
+            "timestamp": (timestamp or datetime.now()).isoformat(),
+            "stay_id": stay_id,
+            "risk_score": round(risk_score, 4),
+            "risk_tier": risk_tier,
+            "ood_flag": ood_flag,
+            "ood_outlier_features": outlier_features,
+            "top_features": [
+                {
+                    "feature": f.get("feature"),
+                    "value": f.get("value"),
+                    "shap": round(f.get("shap", 0), 4),
+                }
+                for f in top_features[:5]
+            ],
+        }
+        with open(self.log_path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record) + "\n")
+
     def read_recent(self, n: int = 50) -> list[dict]:
         """Return the last n audit records (for dashboard display)."""
         if not self.log_path.exists():

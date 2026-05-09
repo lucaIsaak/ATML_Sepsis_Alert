@@ -17,7 +17,8 @@ export interface ShapFeature {
 export interface PatientDetail extends Patient {
   shap_top: ShapFeature[]      // top 16 by |shap|, used as top 8 in UI
   shap_bottom: ShapFeature[]   // bottom 8 by |shap|
-  ood_flag: 'NORMAL' | 'BORDERLINE' | 'OOD'
+  // Values from backend guardrails.py: 'NORMAL' | 'CAUTION' | 'LOW_CONFIDENCE'
+  ood_flag: 'NORMAL' | 'CAUTION' | 'LOW_CONFIDENCE'
   outlier_features: string[]
 }
 
@@ -63,7 +64,7 @@ export interface DriftStatus {
 }
 
 export interface FeedbackAgentStatus {
-  decision: 'WAIT' | 'FLAG' | 'RETRAIN'
+  decision: 'WAIT' | 'STABLE' | 'FLAG' | 'RETRAIN'
   reason: string
   evaluated_at: string
   clinical_total: number

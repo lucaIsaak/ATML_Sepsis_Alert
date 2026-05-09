@@ -159,6 +159,34 @@ class PatientMonitorAgent:  # pylint: disable=too-many-instance-attributes
         self.threshold_critical = 0.8
         self.min_rescore_gap_h  = 1.0   # don't re-alert within 1h unless deteriorating
 
+    @classmethod
+    def from_artifact(cls, artifact: dict, cfg: dict) -> "PatientMonitorAgent":
+        """
+        Construct the agent from an already-loaded model artifact.
+
+        Used by the FastAPI lifespan to avoid double-loading the model from disk.
+        The narrative client (Ollama) is initialised but its availability is
+        checked lazily — the agent works fine without Ollama running.
+        """
+        instance = cls.__new__(cls)
+        instance.cfg          = cfg
+        instance.artifact     = artifact
+        instance.narrative    = OllamaClient(cfg)
+        instance.registry     = BufferRegistry(
+            window_hours=cfg["cohort"]["lookback_window_hours"]
+        )
+        instance.input_guard     = InputGuard.from_artifact(artifact)
+        instance.narrative_guard = NarrativeGuard()
+        instance.audit_logger    = AuditLogger(log_path="logs/audit.jsonl")
+        instance._explainer      = None
+        instance._memory         = {}
+        instance.alert_log       = []
+        instance.threshold_nurse    = cfg["agent"]["risk_threshold"]
+        instance.threshold_doctor   = 0.6
+        instance.threshold_critical = 0.8
+        instance.min_rescore_gap_h  = 1.0
+        return instance
+
     # ---------------------------------------------------------------- #
     # Public API                                                         #
     # ---------------------------------------------------------------- #
@@ -190,6 +218,56 @@ class PatientMonitorAgent:  # pylint: disable=too-many-instance-attributes
                 new_alerts.append(alert)
 
         return new_alerts
+
+    def process_from_dataframe(
+        self,
+        features_df: "pd.DataFrame",
+        timestamp: "datetime | None" = None,
+    ) -> list[AlertRecord]:
+        """
+        Run the full ReAct monitoring loop over a pre-computed features DataFrame.
+
+        This is the primary integration point for the FastAPI backend, which
+        loads features from features.parquet rather than from live FHIR streams.
+        Each row is treated as the current state of one ICU patient.
+
+        Unlike run_cycle() (which reads from BufferRegistry), this method
+        accepts an already-aggregated feature DataFrame directly — matching
+        the format produced by src.data.features.extract_features().
+
+        Side effects:
+            - Writes to logs/audit.jsonl for every alert dispatched.
+            - Updates self._memory (per-patient risk history + suppression).
+            - Appends to self.alert_log.
+
+        Returns list of AlertRecord for patients that triggered an alert this cycle.
+        """
+        if timestamp is None:
+            timestamp = datetime.now()
+
+        new_alerts: list[AlertRecord] = []
+        for _, row in features_df.iterrows():
+            stay_id = str(int(row["stay_id"])) if "stay_id" in row.index else str(_)
+            try:
+                alert = self._process_patient(stay_id, row.to_dict(), timestamp)
+            except Exception as exc:  # pylint: disable=broad-except
+                print(f"[MonitorAgent] Error processing stay {stay_id}: {exc}")
+                alert = None
+            if alert:
+                new_alerts.append(alert)
+
+        return new_alerts
+
+    def update_artifact(self, new_artifact: dict) -> None:
+        """
+        Hot-swap the model artifact after retraining.
+
+        Updates the model, feature columns, and rebuilds InputGuard.
+        SHAP explainer is reset so it is rebuilt on the next request.
+        """
+        self.artifact     = new_artifact
+        self.input_guard  = InputGuard.from_artifact(new_artifact)
+        self._explainer   = None   # force rebuild with new model
 
     def process_streaming_batch(
         self,

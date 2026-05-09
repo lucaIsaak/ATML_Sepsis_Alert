@@ -8,7 +8,9 @@ Start the frontend:
     cd frontend && npm install && npm run dev
 """
 
+import asyncio
 from contextlib import asynccontextmanager
+from datetime import datetime
 import os
 from pathlib import Path
 
@@ -31,9 +33,46 @@ def load_config(path: str = "config.yaml") -> dict:
         return yaml.safe_load(f)
 
 
+def _build_predictions(features_df: pd.DataFrame, artifact: dict, cohort_df: pd.DataFrame) -> pd.DataFrame:
+    """Sample patients, run predictions, merge display columns."""
+    from src.model.predict import predict_batch  # noqa: PLC0415
+    sampled = features_df.sample(n=min(100, len(features_df)), random_state=99)
+    preds = predict_batch(sampled, artifact)
+    display_cols = ["stay_id"] + [c for c in ["age", "gender", "first_careunit"]
+                                   if c in cohort_df.columns]
+    return preds.merge(cohort_df[display_cols], on="stay_id", how="left")
+
+
+async def _periodic_monitoring(app: FastAPI, interval_seconds: int = 3600) -> None:
+    """
+    Background task: run PatientMonitorAgent over the current patient sample
+    every `interval_seconds` (default: 1 hour).
+
+    This keeps the audit log current and updates per-patient memory
+    (risk history, alert suppression) without manual intervention.
+    The first run is delayed by 30 s to let the server finish starting up.
+    """
+    await asyncio.sleep(30)
+    while True:
+        try:
+            monitor: "PatientMonitorAgent" = app.state.monitor_agent  # type: ignore[name-defined]
+            predictions: pd.DataFrame = app.state.predictions
+            if not predictions.empty:
+                features_df: pd.DataFrame = app.state.features_df
+                # Filter to the currently sampled patients only
+                live_ids = set(predictions["stay_id"].tolist())
+                live_features = features_df[features_df["stay_id"].isin(live_ids)]
+                alerts = monitor.process_from_dataframe(live_features, datetime.now())
+                if alerts:
+                    print(f"[Monitor] Cycle complete — {len(alerts)} alert(s) dispatched.")
+        except Exception as exc:  # pylint: disable=broad-except
+            print(f"[Monitor] Background cycle error: {exc}")
+        await asyncio.sleep(interval_seconds)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load model, data and predictions at startup."""
+    """Load model, data and predictions at startup; start background monitor."""
     cfg = load_config()
 
     # Load model artifact (relative paths now safe — os.chdir(ROOT) at module level)
@@ -41,25 +80,47 @@ async def lifespan(app: FastAPI):
 
     # Load feature + cohort data
     features_df = pd.read_parquet("data/processed/features.parquet")
-    cohort_df = pd.read_parquet("data/processed/cohort.parquet")
+    cohort_df   = pd.read_parquet("data/processed/cohort.parquet")
 
-    # Sample 100 patients, run predictions on features only
-    from src.model.predict import predict_batch  # noqa: PLC0415
-    sampled_features = features_df.sample(n=min(100, len(features_df)), random_state=99)
-    predictions = predict_batch(sampled_features, artifact)
+    # Build initial predictions
+    predictions = _build_predictions(features_df, artifact, cohort_df)
 
-    # Merge display columns from cohort (age, gender, first_careunit)
-    display_cols = ["stay_id"] + [c for c in ["age", "gender", "first_careunit"] if c in cohort_df.columns]
-    predictions = predictions.merge(cohort_df[display_cols], on="stay_id", how="left")
+    # ── Instantiate PatientMonitorAgent (reuses already-loaded artifact) ──
+    # Import here to avoid circular imports at module level
+    from src.agent.monitor_agent import PatientMonitorAgent  # noqa: PLC0415
+    monitor_agent = PatientMonitorAgent.from_artifact(artifact, cfg)
+
+    # Run an initial monitoring pass so the audit log is populated at startup.
+    # Errors are caught per-patient inside process_from_dataframe; a failure
+    # here should never prevent the server from starting.
+    try:
+        live_ids = set(predictions["stay_id"].tolist())
+        live_features = features_df[features_df["stay_id"].isin(live_ids)]
+        initial_alerts = monitor_agent.process_from_dataframe(live_features, datetime.now())
+        if initial_alerts:
+            print(f"[Monitor] Startup: {len(initial_alerts)} initial alert(s) dispatched.")
+    except Exception as exc:  # pylint: disable=broad-except
+        print(f"[Monitor] Startup monitoring pass skipped: {exc}")
 
     # Store in app state
-    app.state.cfg = cfg
-    app.state.artifact = artifact
-    app.state.predictions = predictions
-    app.state.features_df = features_df
-    app.state.cohort_df = cohort_df
+    app.state.cfg           = cfg
+    app.state.artifact      = artifact
+    app.state.predictions   = predictions
+    app.state.features_df   = features_df
+    app.state.cohort_df     = cohort_df
+    app.state.monitor_agent = monitor_agent
+
+    # Start periodic background monitoring (1-hour cycle)
+    _monitor_task = asyncio.create_task(_periodic_monitoring(app))
 
     yield
+
+    # Graceful shutdown
+    _monitor_task.cancel()
+    try:
+        await _monitor_task
+    except asyncio.CancelledError:
+        pass
 
 
 app = FastAPI(
