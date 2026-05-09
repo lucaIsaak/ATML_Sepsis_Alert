@@ -21,6 +21,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from src.safety.guardrails import AuditLogger
 from src.agent.feedback_agent import FeedbackLoopAgent
+from src.monitoring.drift import compute_drift_report
 
 _feedback_agent = FeedbackLoopAgent()
 
@@ -142,6 +143,28 @@ async def get_feedback_agent_status() -> dict:
     """
     decision = _feedback_agent.evaluate()
     return decision.to_dict()
+
+
+@router.get("/drift/status")
+async def get_drift_status(request: Request) -> dict:
+    """
+    Compute PSI-based data drift report.
+
+    Compares the live patient feature distributions (current predictions)
+    against the training distribution (features.parquet).
+    Results are logged to logs/drift_history.jsonl for trend tracking.
+    """
+    predictions = request.app.state.predictions
+    features_df = request.app.state.features_df
+    artifact    = request.app.state.artifact
+    feature_cols = artifact["feature_cols"]
+
+    return compute_drift_report(
+        train_df=features_df,
+        live_df=predictions,
+        feature_cols=feature_cols,
+        risk_scores_live=predictions["risk_score"].values,
+    )
 
 
 @router.post("/retrain")
