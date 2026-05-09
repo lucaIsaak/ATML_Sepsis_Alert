@@ -201,7 +201,8 @@ class PatientMonitorAgent:  # pylint: disable=too-many-instance-attributes
 
         Accepts output from MIMICStreamSimulator or a live FHIR webhook.
         """
-        # Route each observation to the right patient buffer
+        # Route each observation to the right patient buffer using typed push
+        # push() auto-routes by item name: vitals → STREAMING, labs → BATCH
         for obs in observations:
             stay_id = getattr(obs, "stay_id", None)
             if stay_id:

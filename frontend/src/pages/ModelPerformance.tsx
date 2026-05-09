@@ -13,10 +13,122 @@ import {
   ReferenceLine,
   Cell,
 } from 'recharts'
-import { Loader2 } from 'lucide-react'
-import { getModelStats } from '@/api/client'
+import { Loader2, RefreshCw } from 'lucide-react'
+import { getModelStats, getFeedbackAgentStatus } from '@/api/client'
 import { MetricCard } from '@/components/MetricCard'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import type { FeedbackAgentStatus } from '@/types'
+
+// ------------------------------------------------------------------ //
+// Feedback Loop Agent status card                                      //
+// ------------------------------------------------------------------ //
+
+const DECISION_STYLES: Record<FeedbackAgentStatus['decision'], { badge: string; bar: string; label: string }> = {
+  WAIT:    { badge: 'bg-slate-100 text-slate-700',   bar: 'bg-slate-400',  label: 'Monitoring' },
+  FLAG:    { badge: 'bg-amber-100 text-amber-800',   bar: 'bg-amber-500',  label: 'Review needed' },
+  RETRAIN: { badge: 'bg-red-100   text-red-800',     bar: 'bg-red-500',    label: 'Retrain recommended' },
+}
+
+function FeedbackAgentCard() {
+  const { data: status, isLoading, refetch, isFetching } = useQuery({
+    queryKey: ['feedback-agent-status'],
+    queryFn: getFeedbackAgentStatus,
+    refetchInterval: 60_000,   // auto-refresh every minute
+  })
+
+  const style = status ? DECISION_STYLES[status.decision] : DECISION_STYLES['WAIT']
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between pb-2">
+        <CardTitle className="text-base">Feedback Loop Agent</CardTitle>
+        <button
+          onClick={() => refetch()}
+          disabled={isFetching}
+          className="text-muted-foreground hover:text-foreground transition-colors"
+          title="Refresh"
+        >
+          <RefreshCw className={`h-4 w-4 ${isFetching ? 'animate-spin' : ''}`} />
+        </button>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {isLoading ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" /> Evaluating feedback logs…
+          </div>
+        ) : !status ? (
+          <p className="text-sm text-muted-foreground">Unable to reach feedback agent.</p>
+        ) : (
+          <>
+            {/* Decision badge + colour bar */}
+            <div className="flex items-center gap-3">
+              <div className={`h-2 w-2 rounded-full ${style.bar}`} />
+              <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${style.badge}`}>
+                {status.decision} — {style.label}
+              </span>
+            </div>
+
+            {/* Reason text */}
+            <p className="text-sm text-muted-foreground leading-relaxed">{status.reason}</p>
+
+            {/* Metrics grid */}
+            <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm border-t pt-3">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Clinical records</span>
+                <span className="font-medium">{status.clinical_total}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Confirmed sepsis</span>
+                <span className="font-medium">{status.confirmed_sepsis}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Flagged wrong</span>
+                <span className="font-medium">{status.flagged_wrong}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">False positive rate</span>
+                <span className="font-medium">
+                  {status.fp_rate != null ? `${(status.fp_rate * 100).toFixed(0)}%` : '—'}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Narrative ratings</span>
+                <span className="font-medium">{status.narrative_total}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Mean star rating</span>
+                <span className="font-medium">
+                  {status.mean_rating != null ? `${status.mean_rating.toFixed(1)} / 5` : '—'}
+                </span>
+              </div>
+            </div>
+
+            {/* Recent clinician corrections */}
+            {status.correction_notes.length > 0 && (
+              <div className="border-t pt-3">
+                <p className="text-xs font-semibold text-muted-foreground mb-1.5 uppercase tracking-wide">
+                  Recent corrections
+                </p>
+                <ul className="space-y-1">
+                  {status.correction_notes.map((note, i) => (
+                    <li key={i} className="text-xs text-muted-foreground italic before:content-['"'] after:content-['"']">
+                      {note}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Evaluated at */}
+            <p className="text-xs text-muted-foreground/60 text-right">
+              Evaluated {new Date(status.evaluated_at).toLocaleTimeString()}
+            </p>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
 
 export function ModelPerformance() {
   const { data: stats, isLoading } = useQuery({
@@ -218,6 +330,9 @@ export function ModelPerformance() {
           </table>
         </CardContent>
       </Card>
+
+      {/* Feedback Loop Agent status */}
+      <FeedbackAgentCard />
     </div>
   )
 }

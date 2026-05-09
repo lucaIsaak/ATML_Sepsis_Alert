@@ -1,5 +1,5 @@
 import axios from 'axios'
-import type { Patient, PatientDetail, ClinicalFeedback, ModelStats } from '@/types'
+import type { Patient, PatientDetail, ClinicalFeedback, ModelStats, FeedbackAgentStatus } from '@/types'
 
 const api = axios.create({
   baseURL: '/api',
@@ -57,6 +57,10 @@ export function transcribeAudio(blob: Blob): Promise<string> {
 
 export function getModelStats(): Promise<ModelStats> {
   return api.get<ModelStats>('/stats').then((r) => r.data)
+}
+
+export function getFeedbackAgentStatus(): Promise<FeedbackAgentStatus> {
+  return api.get<FeedbackAgentStatus>('/feedback-agent/status').then((r) => r.data)
 }
 
 export async function streamNarrative(

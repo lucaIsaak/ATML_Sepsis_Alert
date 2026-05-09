@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from src.api.routers.patients import _shap_cache, _ood_cache, _risk_label
 from src.explainability.shap_explainer import SHAPExplanation, format_for_narrative
 from src.narrative.ollama_client import OllamaClient
+from src.narrative.narrative_agent import NarrativeAgent
 from src.data.narrative_feedback import load_few_shot_examples, find_similar_narratives
 from src.safety.guardrails import NarrativeGuard, AuditLogger, OODResult, NarrativeResult
 
@@ -133,7 +134,12 @@ async def stream_narrative(body: StreamRequest, request: Request):
         )
 
     client = OllamaClient(cfg_copy)
+    agent  = NarrativeAgent(client)
     shap_summary = format_for_narrative(explanation)
+
+    # Build flat feature dict from predictions row for the narrative agent
+    feature_cols = request.app.state.artifact["feature_cols"]
+    features_dict = {col: row.get(col) for col in feature_cols}
 
     # Determine escalation tier for audit log
     if risk_score >= 0.8:
@@ -145,6 +151,9 @@ async def stream_narrative(body: StreamRequest, request: Request):
     else:
         tier = "NONE"
 
+    # Alert context — tells the agent whether this is the first alert
+    alert_context = "First alert for this patient in current session"
+
     # Build OODResult from cache (populated by patients router) or default NORMAL
     cached_ood = _ood_cache.get(stay_id, {})
     ood_result = OODResult(
@@ -155,8 +164,13 @@ async def stream_narrative(body: StreamRequest, request: Request):
     )
 
     def _generate():
-        # 1. Collect full LLM output (required for NarrativeGuard validation)
-        chunks = list(client.stream_alert(explanation, context))
+        # 1. Collect full agent output (required for NarrativeGuard validation)
+        chunks = list(agent.stream_generate(
+            explanation,
+            features=features_dict,
+            few_shot_context=context,
+            alert_context=alert_context,
+        ))
         full_text = "".join(chunks)
 
         # 2. Validate with NarrativeGuard (Layer 2 safety)
