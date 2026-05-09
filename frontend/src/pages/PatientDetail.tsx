@@ -97,22 +97,22 @@ export function PatientDetailPage() {
         </div>
       )}
 
-      {/* OOD warning */}
+      {/* OOD warning — backend values: 'NORMAL' | 'CAUTION' | 'LOW_CONFIDENCE' */}
       {patient.ood_flag !== 'NORMAL' && (
         <div className={[
           'rounded-md px-4 py-3 text-sm flex items-start gap-3 border',
-          patient.ood_flag === 'OOD'
+          patient.ood_flag === 'LOW_CONFIDENCE'
             ? 'bg-red-50 text-red-800 border-red-200'
             : 'bg-amber-50 text-amber-800 border-amber-200',
         ].join(' ')}>
-          {patient.ood_flag === 'OOD'
+          {patient.ood_flag === 'LOW_CONFIDENCE'
             ? <ShieldAlert className="h-4 w-4 shrink-0 mt-0.5" />
             : <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />}
           <div>
             <p className="font-semibold">
-              {patient.ood_flag === 'OOD'
+              {patient.ood_flag === 'LOW_CONFIDENCE'
                 ? 'Out-of-distribution input — risk score may be unreliable'
-                : 'Borderline input — interpret risk score with caution'}
+                : 'Borderline input (1–2 outlier features) — interpret with caution'}
             </p>
             {patient.outlier_features.length > 0 && (
               <p className="mt-0.5 text-xs opacity-80">

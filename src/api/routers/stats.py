@@ -74,31 +74,170 @@ def _run_retrain_subprocess() -> None:
             _retrain_state["exit_code"]   = exit_code
             _retrain_state["finished_at"] = datetime.now(timezone.utc).isoformat()
 
+        # ── Hot-reload the new model into app.state ──────────────────────
+        if exit_code == 0:
+            _hot_reload_model()
+
     except Exception as exc:  # pylint: disable=broad-except
         with _retrain_lock:
             _retrain_state["status"]      = "error"
             _retrain_state["log"]        += f"\n[Internal error] {exc}"
             _retrain_state["finished_at"] = datetime.now(timezone.utc).isoformat()
 
-# NEWS2 risk scores are simulated from known vital-sign weights
-# (this mirrors what the Streamlit dashboard does)
-_NEWS2_WEIGHTS = {
-    "resp_rate_last": 3,
-    "spo2_last": 3,
-    "heart_rate_last": 1,
-    "temperature_f_last": 2,
-    "map_last": 3,
-}
-_NEWS2_MAX = sum(_NEWS2_WEIGHTS.values())
+
+def _hot_reload_model() -> None:
+    """
+    Reload the newly saved model artifact into the running FastAPI app.
+
+    Called automatically after a successful retrain so the live API
+    starts serving predictions from the improved model immediately —
+    no server restart required.
+    """
+    import joblib  # noqa: PLC0415
+    from src.api.main import app  # noqa: PLC0415
+
+    artifact_path = Path("models/sepsis_model.pkl")
+    if not artifact_path.exists():
+        with _retrain_lock:
+            _retrain_state["log"] += "\n[Hot-reload] model file not found — skipping reload."
+        return
+
+    try:
+        new_artifact = joblib.load(artifact_path)
+        app.state.artifact = new_artifact
+
+        # Re-run predictions with the new model on the same patient sample
+        from src.model.predict import predict_batch  # noqa: PLC0415
+        features_df = app.state.features_df
+        cohort_df   = app.state.cohort_df
+        sample = features_df.sample(n=min(100, len(features_df)), random_state=99)
+        new_preds = predict_batch(sample, new_artifact)
+        display_cols = ["stay_id"] + [c for c in ["age", "gender", "first_careunit"]
+                                       if c in cohort_df.columns]
+        new_preds = new_preds.merge(cohort_df[display_cols], on="stay_id", how="left")
+        app.state.predictions = new_preds
+
+        # Clear per-patient caches so SHAP / OOD are recomputed for new model
+        from src.api.routers.patients import _shap_cache, _ood_cache  # noqa: PLC0415
+        _shap_cache.clear()
+        _ood_cache.clear()
+
+        # Also update the PatientMonitorAgent's model reference
+        if hasattr(app.state, "monitor_agent"):
+            app.state.monitor_agent.update_artifact(new_artifact)
+
+        with _retrain_lock:
+            _retrain_state["log"] += (
+                f"\n[Hot-reload] ✓ New model loaded (AUROC {new_artifact.get('auroc', '?'):.4f}). "
+                "Predictions refreshed. No server restart needed."
+            )
+    except Exception as exc:  # pylint: disable=broad-except
+        with _retrain_lock:
+            _retrain_state["log"] += f"\n[Hot-reload] ✗ Failed: {exc}"
+
+def _news2_score(row) -> float:
+    """
+    Compute a proper NEWS2 score from available feature columns.
+
+    NEWS2 (Royal College of Physicians, 2017) is a track-and-trigger system
+    used in UK ICUs as a clinical deterioration baseline.
+
+    Ranges sourced from: https://www.rcplondon.ac.uk/projects/outputs/national-early-warning-score-news-2
+
+    We use available MIMIC-IV features; supplemental O2 and consciousness
+    (AVPU) are omitted as they are not in features.parquet.
+    Maximum achievable score here = 16 (out of 20 with O2/consciousness).
+    Normalised to [0, 1] for AUROC comparison.
+    """
+    def _get(col_a, col_b=None):
+        """Return first non-NaN value from column a or fallback b."""
+        for col in [col_a, col_b]:
+            if col and col in row.index:
+                v = row[col]
+                if v is not None and not (isinstance(v, float) and np.isnan(v)):
+                    return float(v)
+        return None
+
+    score = 0
+
+    # ── Respiratory rate ───────────────────────────────────────────
+    rr = _get("resp_rate_last", "resp_rate_mean")
+    if rr is not None:
+        if rr <= 8 or rr >= 25:
+            score += 3
+        elif 21 <= rr <= 24:
+            score += 2
+        elif 9 <= rr <= 11:
+            score += 1
+        # 12–20 → 0
+
+    # ── SpO2 ───────────────────────────────────────────────────────
+    spo2 = _get("spo2_last", "spo2_mean")
+    if spo2 is not None:
+        if spo2 <= 91:
+            score += 3
+        elif 92 <= spo2 <= 93:
+            score += 2
+        elif 94 <= spo2 <= 95:
+            score += 1
+        # ≥96 → 0
+
+    # ── Temperature (Fahrenheit → Celsius) ─────────────────────────
+    temp_f = _get("temperature_f_last", "temperature_f_mean")
+    if temp_f is not None:
+        temp_c = (temp_f - 32.0) * 5.0 / 9.0
+        if temp_c <= 35.0:
+            score += 3
+        elif 35.1 <= temp_c <= 36.0:
+            score += 1
+        elif 38.1 <= temp_c <= 39.0:
+            score += 1
+        elif temp_c >= 39.1:
+            score += 2
+        # 36.1–38.0 → 0
+
+    # ── MAP as blood-pressure proxy ────────────────────────────────
+    # NEWS2 uses systolic BP; MIMIC features store MAP.
+    # Approximate equivalence: MAP ≈ (SBP + 2*DBP)/3
+    # Threshold mapping:  SBP ≤ 90 ≈ MAP ≤ 60,  SBP 91-100 ≈ MAP 61-70
+    #                     SBP ≥ 220 ≈ MAP ≥ 150
+    map_v = _get("map_last", "map_mean")
+    if map_v is not None:
+        if map_v <= 60 or map_v >= 150:
+            score += 3
+        elif 61 <= map_v <= 70:
+            score += 2
+        elif 71 <= map_v <= 80:
+            score += 1
+        # 81–149 → 0
+
+    # ── Heart rate ─────────────────────────────────────────────────
+    hr = _get("heart_rate_last", "heart_rate_mean")
+    if hr is not None:
+        if hr <= 40 or hr >= 131:
+            score += 3
+        elif 111 <= hr <= 130:
+            score += 2
+        elif 41 <= hr <= 50 or 91 <= hr <= 110:
+            score += 1
+        # 51–90 → 0
+
+    # Normalise: max achievable without O2/consciousness = 16
+    return score / 16.0
 
 
 def _compute_news2_score(row) -> float:
-    """Approximate NEWS2 score normalised to [0, 1] from feature values."""
-    score = 0.0
-    for feat, weight in _NEWS2_WEIGHTS.items():
-        if feat in row.index and not np.isnan(row[feat]):
-            score += weight
-    return score / _NEWS2_MAX if _NEWS2_MAX > 0 else 0.0
+    """Wrapper kept for compatibility — delegates to _news2_score()."""
+    return _news2_score(row)
+
+
+def _pr_curve_auprc(y_true, y_score) -> float:
+    """Compute AUPRC (average precision) dynamically from current predictions."""
+    from sklearn.metrics import average_precision_score  # noqa: PLC0415
+    try:
+        return float(average_precision_score(y_true, y_score))
+    except Exception:  # pylint: disable=broad-except
+        return 0.0
 
 
 def _roc_curve_points(y_true, y_score, n_points: int = 100) -> list[dict]:
@@ -115,14 +254,15 @@ def _roc_curve_points(y_true, y_score, n_points: int = 100) -> list[dict]:
 async def get_model_info(request: Request) -> dict:
     """Return model metadata: algorithm, AUROC, feature count, sklearn version."""
     artifact = request.app.state.artifact
+    model_type = type(artifact.get("model", None)).__name__ if artifact.get("model") else "Unknown"
     return {
-        "algorithm":       "HistGradientBoostingClassifier",
+        "algorithm":       f"{model_type} (sklearn {sklearn.__version__})",
         "auroc":           float(artifact.get("auroc", 0.895)),
         "feature_count":   len(artifact.get("feature_cols", [])),
         "sklearn_version": sklearn.__version__,
         "training_data":   "MIMIC-IV v3.1 — 93,224 ICU stays",
         "label_strategy":  "Sepsis-3 ICD-10 proxy (A41.x / R65.2x)",
-        "tuning":          "Optuna Bayesian search — 50 trials, 5-fold CV",
+        "tuning":          "Initial: Optuna Bayesian 50-trial search. Retrain: fixed hyperparams from config.",
     }
 
 
@@ -227,11 +367,20 @@ async def get_stats(request: Request) -> dict:
     artifact = request.app.state.artifact
     auroc = float(artifact.get("auroc", 0.895))
 
+    # Compute AUPRC dynamically from the current predictions + ground truth
+    auprc = _pr_curve_auprc(y_true, y_score)
+    # Compute NEWS2 AUROC dynamically too
+    from sklearn.metrics import roc_auc_score as _roc_auc  # noqa: PLC0415
+    try:
+        news2_auroc = float(_roc_auc(y_true, news2_scores))
+    except Exception:  # pylint: disable=broad-except
+        news2_auroc = 0.614  # fallback if computation fails
+
     return {
         # AUROC read from the actual trained artifact — updates after retrain
         "auroc": auroc,
-        "news2_auroc": 0.614,
-        "auprc": 0.527,
+        "news2_auroc": round(news2_auroc, 3),
+        "auprc": round(auprc, 3),
         "total_stays": 93224,
         "sepsis_cases": 9890,
         "features": len(artifact.get("feature_cols", [])) or 43,

@@ -25,7 +25,8 @@ import type { FeedbackAgentStatus, DriftStatus } from '@/types'
 // ------------------------------------------------------------------ //
 
 const DECISION_STYLES: Record<FeedbackAgentStatus['decision'], { badge: string; bar: string; label: string }> = {
-  WAIT:    { badge: 'bg-slate-100 text-slate-700',   bar: 'bg-slate-400',  label: 'Monitoring' },
+  WAIT:    { badge: 'bg-slate-100 text-slate-700',   bar: 'bg-slate-400',  label: 'Collecting data' },
+  STABLE:  { badge: 'bg-emerald-100 text-emerald-800', bar: 'bg-emerald-500', label: 'All metrics healthy' },
   FLAG:    { badge: 'bg-amber-100 text-amber-800',   bar: 'bg-amber-500',  label: 'Review needed' },
   RETRAIN: { badge: 'bg-red-100   text-red-800',     bar: 'bg-red-500',    label: 'Retrain recommended' },
 }
@@ -519,7 +520,7 @@ export function ModelPerformance() {
     { label: 'Features', value: stats.features },
     { label: 'Prediction horizon', value: '6 hours before onset' },
     { label: 'Lookback window', value: '24 hours' },
-    { label: 'Model', value: 'LightGBM (Optuna-tuned)' },
+    { label: 'Model', value: 'HistGradientBoostingClassifier (sklearn) — initial train Optuna-tuned' },
   ]
 
   return (

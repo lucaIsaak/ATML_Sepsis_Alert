@@ -11,6 +11,8 @@ import numpy as np
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Request
 
+from src.safety.guardrails import AuditLogger
+
 router = APIRouter()
 
 # Module-level caches so SHAP and OOD checks are only computed once per patient
@@ -18,6 +20,7 @@ _shap_cache: dict[int, list[dict]] = {}
 _ood_cache:  dict[int, dict] = {}       # stay_id → {flag, outlier_features}
 _explainer   = None   # lazily initialised on first SHAP request
 _input_guard = None   # lazily initialised on first OOD request
+_audit_logger = AuditLogger(log_path="logs/audit.jsonl")
 
 
 def _get_input_guard(artifact: dict):
@@ -146,9 +149,25 @@ async def get_patient(stay_id: int, request: Request) -> dict:
             "feature": f.get("feature", f.get("label", "")),
         }
 
+    shap_top    = [to_shap_dict(f) for f in sorted_desc[:16]]
+    shap_bottom = [to_shap_dict(f) for f in sorted_asc[:8]]
+
+    # Audit every prediction served to a clinician (GDPR Art. 22 / EU AI Act)
+    _risk_tier = patient["risk_label"]
+    _ood = ood_info.get("ood_flag", "NORMAL")
+    _outliers = ood_info.get("outlier_features", [])
+    _audit_logger.log_prediction(
+        stay_id=str(stay_id),
+        risk_score=risk_score,
+        risk_tier=_risk_tier,
+        ood_flag=_ood,
+        outlier_features=_outliers,
+        top_features=shap_top[:5],
+    )
+
     return {
         **patient,
         **ood_info,
-        "shap_top":    [to_shap_dict(f) for f in sorted_desc[:16]],
-        "shap_bottom": [to_shap_dict(f) for f in sorted_asc[:8]],
+        "shap_top":    shap_top,
+        "shap_bottom": shap_bottom,
     }

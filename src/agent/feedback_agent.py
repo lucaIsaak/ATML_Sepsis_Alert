@@ -12,21 +12,21 @@ Two feedback streams are monitored in parallel:
 
 Decision logic
 --------------
-  WAIT     — not enough data yet (< 10 clinical records OR < 5 narrative ratings)
+  WAIT     — not enough data yet (< min_records_to_act clinical records)
+  STABLE   — sufficient data collected, all metrics within acceptable range
   FLAG     — quality issue detected:
-               • Mean narrative rating < 2.5 (clinicians unhappy with LLM output)
-               • Rating std > 1.5 (contradictory / inconsistent feedback)
-               • False positive rate > 40% (model alerts too many non-sepsis patients)
+               • Mean narrative rating < flag_rating_below (clinicians unhappy)
+               • Rating std > flag_rating_std (contradictory / inconsistent feedback)
+               • False positive rate > flag_fp_rate_above
   RETRAIN  — sufficient signal to improve:
-               • ≥ 20 confirmed sepsis labels accumulated  AND
-               • False positive rate > 30% (model has consistent systematic error)
+               • ≥ retrain_min_confirmed confirmed sepsis labels  AND
+               • False positive rate > retrain_fp_rate_above
+
+Thresholds are loaded from config.yaml (feedback_agent section) with
+sensible defaults so the agent works without configuration.
 
 The agent is stateless — call evaluate() at any time and it reads
 the current log files fresh, so it reflects the latest clinician feedback.
-
-This is deterministic rule-based reasoning (not a second LLM call).
-The rules are intentionally conservative: RETRAIN is only triggered when
-there is both enough positive labels AND evidence of false-positive overload.
 """
 
 from __future__ import annotations
@@ -36,18 +36,43 @@ import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 _CLINICAL_LOG   = Path("logs/feedback.jsonl")
 _NARRATIVE_LOG  = Path("logs/narrative_feedback.jsonl")
+_CONFIG_PATH    = Path("config.yaml")
 
-# Thresholds (tunable via config in a future version)
-_MIN_RECORDS_TO_ACT     = 10    # need this many clinical records before FLAG/RETRAIN
-_MIN_NARRATIVE_TO_ACT   = 5     # need this many narrative ratings before using them
-_FLAG_RATING_MEAN       = 2.5   # flag if mean star rating falls below this
-_FLAG_RATING_STD        = 1.5   # flag if rating std exceeds this (contradictory feedback)
-_FLAG_FP_RATE           = 0.40  # flag if false positive rate exceeds 40 %
-_RETRAIN_MIN_CONFIRMED  = 20    # need at least 20 confirmed sepsis labels for retraining
-_RETRAIN_FP_RATE        = 0.30  # retrain if false positive rate exceeds 30 %
+
+def _load_thresholds() -> dict:
+    """Load feedback-agent thresholds from config.yaml with safe defaults."""
+    defaults = {
+        "min_records_to_act":   10,
+        "min_narrative_to_act": 5,
+        "flag_rating_below":    2.5,
+        "flag_rating_std":      1.5,
+        "flag_fp_rate_above":   0.40,
+        "retrain_min_confirmed": 5,   # lowered from 20 → achievable in demo
+        "retrain_fp_rate_above": 0.30,
+    }
+    if _CONFIG_PATH.exists():
+        try:
+            import yaml  # noqa: PLC0415
+            with _CONFIG_PATH.open(encoding="utf-8") as f:
+                cfg = yaml.safe_load(f) or {}
+            defaults.update(cfg.get("feedback_agent", {}))
+        except Exception:  # pylint: disable=broad-except
+            pass
+    return defaults
+
+
+_T = _load_thresholds()
+_MIN_RECORDS_TO_ACT     = _T["min_records_to_act"]
+_MIN_NARRATIVE_TO_ACT   = _T["min_narrative_to_act"]
+_FLAG_RATING_MEAN       = _T["flag_rating_below"]
+_FLAG_RATING_STD        = _T["flag_rating_std"]
+_FLAG_FP_RATE           = _T["flag_fp_rate_above"]
+_RETRAIN_MIN_CONFIRMED  = _T["retrain_min_confirmed"]
+_RETRAIN_FP_RATE        = _T["retrain_fp_rate_above"]
 
 
 # ------------------------------------------------------------------ #
@@ -76,18 +101,18 @@ class FeedbackDecision:
     correction_notes: Recent free-text corrections from clinicians (up to 5)
     """
 
-    decision:         str
+    decision:         str   # "WAIT" | "STABLE" | "FLAG" | "RETRAIN"
     reason:           str
     details:          dict = field(default_factory=dict)
     evaluated_at:     str  = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     clinical_total:   int  = 0
     confirmed_sepsis: int  = 0
     flagged_wrong:    int  = 0
-    fp_rate:          float | None = None
+    fp_rate:          Optional[float] = None
     narrative_total:  int  = 0
-    mean_rating:      float | None = None
-    std_rating:       float | None = None
-    low_rated_pct:    float | None = None
+    mean_rating:      Optional[float] = None
+    std_rating:       Optional[float] = None
+    low_rated_pct:    Optional[float] = None
     correction_notes: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -252,16 +277,16 @@ class FeedbackLoopAgent:
                 correction_notes=notes,
             )
 
-        # All thresholds are fine — continue monitoring
+        # All thresholds are fine — system is healthy
         rating_str = f", mean narrative rating {mean_rating:.1f}/5" if mean_rating is not None else ""
         fp_str = f", FP rate {fp_rate:.0%}" if fp_rate is not None else ""
         reason = (
-            f"All metrics within acceptable range: {clinical_total} clinical records "
-            f"({confirmed} confirmed sepsis, {flagged} false positives)"
-            f"{fp_str}{rating_str}. Continue monitoring."
+            f"All metrics healthy: {clinical_total} clinical records "
+            f"({confirmed} confirmed sepsis, {flagged} flagged wrong)"
+            f"{fp_str}{rating_str}. No action required."
         )
         return FeedbackDecision(
-            decision="WAIT", reason=reason, details=details,
+            decision="STABLE", reason=reason, details=details,
             clinical_total=clinical_total, confirmed_sepsis=confirmed,
             flagged_wrong=flagged, fp_rate=fp_rate,
             narrative_total=narrative_total, mean_rating=mean_rating,
