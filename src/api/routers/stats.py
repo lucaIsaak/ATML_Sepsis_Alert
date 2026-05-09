@@ -28,6 +28,15 @@ _feedback_agent = FeedbackLoopAgent()
 router = APIRouter()
 _audit_logger = AuditLogger(log_path="logs/audit.jsonl")
 
+# App reference injected by lifespan — avoids circular import from src.api.main
+_app = None
+
+
+def set_app(app) -> None:  # noqa: ANN001
+    """Called once from main.py lifespan so hot-reload can access app.state."""
+    global _app  # noqa: PLW0603
+    _app = app
+
 # ------------------------------------------------------------------ #
 # Retrain subprocess state (in-memory, single instance)               #
 # ------------------------------------------------------------------ #
@@ -92,9 +101,17 @@ def _hot_reload_model() -> None:
     Called automatically after a successful retrain so the live API
     starts serving predictions from the improved model immediately —
     no server restart required.
+
+    Uses the module-level `_app` reference injected via set_app() during
+    lifespan startup — avoids a circular import from src.api.main.
     """
     import joblib  # noqa: PLC0415
-    from src.api.main import app  # noqa: PLC0415
+
+    app = _app  # injected by lifespan; None if server not fully started yet
+    if app is None:
+        with _retrain_lock:
+            _retrain_state["log"] += "\n[Hot-reload] app reference not set — skipping reload."
+        return
 
     artifact_path = Path("models/sepsis_model.pkl")
     if not artifact_path.exists():
@@ -118,9 +135,12 @@ def _hot_reload_model() -> None:
         app.state.predictions = new_preds
 
         # Clear per-patient caches so SHAP / OOD are recomputed for new model
-        from src.api.routers.patients import _shap_cache, _ood_cache  # noqa: PLC0415
-        _shap_cache.clear()
-        _ood_cache.clear()
+        import src.api.routers.patients as _patients_router  # noqa: PLC0415
+        _patients_router._shap_cache.clear()
+        _patients_router._ood_cache.clear()
+        # Reset lazily-built guards so they are rebuilt against the new model weights
+        _patients_router._input_guard = None
+        _patients_router._explainer   = None
 
         # Also update the PatientMonitorAgent's model reference
         if hasattr(app.state, "monitor_agent"):
@@ -222,8 +242,8 @@ def _news2_score(row) -> float:
             score += 1
         # 51–90 → 0
 
-    # Normalise: max achievable without O2/consciousness = 16
-    return score / 16.0
+    # Normalise: 5 components × max 3 points each = 15 (O2 and consciousness omitted)
+    return score / 15.0
 
 
 def _compute_news2_score(row) -> float:

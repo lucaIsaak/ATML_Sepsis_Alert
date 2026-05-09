@@ -300,7 +300,8 @@ class AuditLogger:
             "timestamp": (timestamp or datetime.now()).isoformat(),
             "stay_id": stay_id,
             "risk_score": round(risk_score, 4),
-            "escalation_tier": tier,
+            "risk_tier": tier,          # unified key — matches log_prediction() and the audit UI
+            "escalation_tier": tier,    # kept for backward-compat with existing log readers
             "ood_flag": ood_result.confidence_flag,
             "ood_outlier_features": ood_result.outlier_features,
             "narrative_was_replaced": narrative_result.was_replaced,

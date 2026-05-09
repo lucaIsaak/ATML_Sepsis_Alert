@@ -26,6 +26,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.routers import patients, narrative, feedback, stats
+from src.api.routers.stats import set_app as _set_stats_app
 
 
 def load_config(path: str = "config.yaml") -> dict:
@@ -43,26 +44,43 @@ def _build_predictions(features_df: pd.DataFrame, artifact: dict, cohort_df: pd.
     return preds.merge(cohort_df[display_cols], on="stay_id", how="left")
 
 
-async def _periodic_monitoring(app: FastAPI, interval_seconds: int = 3600) -> None:
+async def _periodic_monitoring(
+    app: FastAPI,
+    interval_seconds: int = 3600,
+    run_immediately: bool = False,
+) -> None:
     """
     Background task: run PatientMonitorAgent over the current patient sample
     every `interval_seconds` (default: 1 hour).
 
     This keeps the audit log current and updates per-patient memory
     (risk history, alert suppression) without manual intervention.
-    The first run is delayed by 30 s to let the server finish starting up.
+
+    When `run_immediately` is True the first pass executes right away
+    (used by lifespan startup instead of a blocking synchronous call).
+    Otherwise a 30 s startup grace-period is applied.
     """
-    await asyncio.sleep(30)
+    if not run_immediately:
+        await asyncio.sleep(30)
+
     while True:
         try:
+            loop = asyncio.get_running_loop()
             monitor: "PatientMonitorAgent" = app.state.monitor_agent  # type: ignore[name-defined]
             predictions: pd.DataFrame = app.state.predictions
             if not predictions.empty:
                 features_df: pd.DataFrame = app.state.features_df
-                # Filter to the currently sampled patients only
                 live_ids = set(predictions["stay_id"].tolist())
                 live_features = features_df[features_df["stay_id"].isin(live_ids)]
-                alerts = monitor.process_from_dataframe(live_features, datetime.now())
+                ts = datetime.now()
+                # Run the blocking monitoring pass in a thread-pool executor
+                # so the event loop stays responsive during Ollama / SHAP calls.
+                alerts = await loop.run_in_executor(
+                    None,
+                    monitor.process_from_dataframe,
+                    live_features,
+                    ts,
+                )
                 if alerts:
                     print(f"[Monitor] Cycle complete — {len(alerts)} alert(s) dispatched.")
         except Exception as exc:  # pylint: disable=broad-except
@@ -90,18 +108,6 @@ async def lifespan(app: FastAPI):
     from src.agent.monitor_agent import PatientMonitorAgent  # noqa: PLC0415
     monitor_agent = PatientMonitorAgent.from_artifact(artifact, cfg)
 
-    # Run an initial monitoring pass so the audit log is populated at startup.
-    # Errors are caught per-patient inside process_from_dataframe; a failure
-    # here should never prevent the server from starting.
-    try:
-        live_ids = set(predictions["stay_id"].tolist())
-        live_features = features_df[features_df["stay_id"].isin(live_ids)]
-        initial_alerts = monitor_agent.process_from_dataframe(live_features, datetime.now())
-        if initial_alerts:
-            print(f"[Monitor] Startup: {len(initial_alerts)} initial alert(s) dispatched.")
-    except Exception as exc:  # pylint: disable=broad-except
-        print(f"[Monitor] Startup monitoring pass skipped: {exc}")
-
     # Store in app state
     app.state.cfg           = cfg
     app.state.artifact      = artifact
@@ -110,8 +116,15 @@ async def lifespan(app: FastAPI):
     app.state.cohort_df     = cohort_df
     app.state.monitor_agent = monitor_agent
 
-    # Start periodic background monitoring (1-hour cycle)
-    _monitor_task = asyncio.create_task(_periodic_monitoring(app))
+    # Inject app reference into the stats router (avoids circular import in hot-reload)
+    _set_stats_app(app)
+
+    # Start periodic background monitoring (1-hour cycle).
+    # run_immediately=True: first pass executes in the thread pool right away,
+    # keeping the event loop free (no blocking Ollama / SHAP calls on startup).
+    _monitor_task = asyncio.create_task(
+        _periodic_monitoring(app, run_immediately=True)
+    )
 
     yield
 
