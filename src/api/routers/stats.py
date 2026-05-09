@@ -1,14 +1,23 @@
 """
 Stats routes.
 
-GET /stats — model performance metrics + ROC curve data
+GET  /stats                  — model performance metrics + ROC curve data
+GET  /feedback-agent/status  — FeedbackLoopAgent WAIT / FLAG / RETRAIN decision
+POST /retrain                — launch retrain_with_feedback.py as a subprocess
+GET  /retrain/status         — poll subprocess state (idle | running | done | error)
 """
 
 from __future__ import annotations
 
+import subprocess
+import sys
+import threading
+from datetime import datetime, timezone
+from pathlib import Path
+
 import sklearn
 import numpy as np
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 
 from src.safety.guardrails import AuditLogger
 from src.agent.feedback_agent import FeedbackLoopAgent
@@ -17,6 +26,58 @@ _feedback_agent = FeedbackLoopAgent()
 
 router = APIRouter()
 _audit_logger = AuditLogger(log_path="logs/audit.jsonl")
+
+# ------------------------------------------------------------------ #
+# Retrain subprocess state (in-memory, single instance)               #
+# ------------------------------------------------------------------ #
+
+_retrain_state: dict = {
+    "status":      "idle",   # idle | running | done | error
+    "log":         "",
+    "started_at":  None,
+    "finished_at": None,
+    "exit_code":   None,
+}
+_retrain_lock = threading.Lock()
+
+
+def _run_retrain_subprocess() -> None:
+    """Run retrain_with_feedback.py in a background thread."""
+    script = Path("retrain_with_feedback.py")
+
+    with _retrain_lock:
+        _retrain_state["status"]      = "running"
+        _retrain_state["log"]         = ""
+        _retrain_state["started_at"]  = datetime.now(timezone.utc).isoformat()
+        _retrain_state["finished_at"] = None
+        _retrain_state["exit_code"]   = None
+
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, str(script)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        # Stream output line by line into state log
+        for line in proc.stdout:  # type: ignore[union-attr]
+            with _retrain_lock:
+                _retrain_state["log"] += line
+
+        proc.wait()
+        exit_code = proc.returncode
+
+        with _retrain_lock:
+            _retrain_state["status"]      = "done" if exit_code == 0 else "error"
+            _retrain_state["exit_code"]   = exit_code
+            _retrain_state["finished_at"] = datetime.now(timezone.utc).isoformat()
+
+    except Exception as exc:  # pylint: disable=broad-except
+        with _retrain_lock:
+            _retrain_state["status"]      = "error"
+            _retrain_state["log"]        += f"\n[Internal error] {exc}"
+            _retrain_state["finished_at"] = datetime.now(timezone.utc).isoformat()
 
 # NEWS2 risk scores are simulated from known vital-sign weights
 # (this mirrors what the Streamlit dashboard does)
@@ -81,6 +142,34 @@ async def get_feedback_agent_status() -> dict:
     """
     decision = _feedback_agent.evaluate()
     return decision.to_dict()
+
+
+@router.post("/retrain")
+async def trigger_retrain() -> dict:
+    """
+    Launch retrain_with_feedback.py as a background subprocess.
+
+    Returns 409 if a retrain is already in progress.
+    The script compares old vs new AUROC and only saves if the new model improves.
+    Poll GET /retrain/status for progress and log output.
+    """
+    with _retrain_lock:
+        if _retrain_state["status"] == "running":
+            raise HTTPException(
+                status_code=409,
+                detail="Retraining is already in progress. Poll /retrain/status for updates.",
+            )
+
+    thread = threading.Thread(target=_run_retrain_subprocess, daemon=True)
+    thread.start()
+    return {"status": "started", "message": "Retraining launched. Poll /retrain/status."}
+
+
+@router.get("/retrain/status")
+async def get_retrain_status() -> dict:
+    """Return current retrain subprocess state and captured log output."""
+    with _retrain_lock:
+        return dict(_retrain_state)
 
 
 @router.get("/stats")

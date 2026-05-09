@@ -13,8 +13,9 @@ import {
   ReferenceLine,
   Cell,
 } from 'recharts'
-import { Loader2, RefreshCw } from 'lucide-react'
-import { getModelStats, getFeedbackAgentStatus } from '@/api/client'
+import { useState, useEffect, useRef } from 'react'
+import { Loader2, RefreshCw, Play } from 'lucide-react'
+import { getModelStats, getFeedbackAgentStatus, triggerRetrain, getRetrainStatus } from '@/api/client'
 import { MetricCard } from '@/components/MetricCard'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import type { FeedbackAgentStatus } from '@/types'
@@ -33,8 +34,55 @@ function FeedbackAgentCard() {
   const { data: status, isLoading, refetch, isFetching } = useQuery({
     queryKey: ['feedback-agent-status'],
     queryFn: getFeedbackAgentStatus,
-    refetchInterval: 60_000,   // auto-refresh every minute
+    refetchInterval: 60_000,
   })
+
+  const [retrainStatus, setRetrainStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle')
+  const [retrainLog, setRetrainLog] = useState('')
+  const [launching, setLaunching] = useState(false)
+  const logRef = useRef<HTMLPreElement>(null)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // Auto-scroll log to bottom as new lines arrive
+  useEffect(() => {
+    if (logRef.current) {
+      logRef.current.scrollTop = logRef.current.scrollHeight
+    }
+  }, [retrainLog])
+
+  // Clean up polling on unmount
+  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
+
+  const startPolling = () => {
+    if (pollRef.current) clearInterval(pollRef.current)
+    pollRef.current = setInterval(async () => {
+      const s = await getRetrainStatus()
+      setRetrainLog(s.log)
+      setRetrainStatus(s.status)
+      if (s.status === 'done' || s.status === 'error') {
+        clearInterval(pollRef.current!)
+        pollRef.current = null
+        // Refresh agent decision — model may have improved
+        refetch()
+      }
+    }, 1500)
+  }
+
+  const handleRetrain = async () => {
+    setLaunching(true)
+    setRetrainLog('')
+    try {
+      await triggerRetrain()
+      setRetrainStatus('running')
+      startPolling()
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      setRetrainLog(`Failed to start retraining: ${msg}`)
+      setRetrainStatus('error')
+    } finally {
+      setLaunching(false)
+    }
+  }
 
   const style = status ? DECISION_STYLES[status.decision] : DECISION_STYLES['WAIT']
 
@@ -60,7 +108,7 @@ function FeedbackAgentCard() {
           <p className="text-sm text-muted-foreground">Unable to reach feedback agent.</p>
         ) : (
           <>
-            {/* Decision badge + colour bar */}
+            {/* Decision badge */}
             <div className="flex items-center gap-3">
               <div className={`h-2 w-2 rounded-full ${style.bar}`} />
               <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${style.badge}`}>
@@ -111,11 +159,69 @@ function FeedbackAgentCard() {
                 </p>
                 <ul className="space-y-1">
                   {status.correction_notes.map((note, i) => (
-                    <li key={i} className="text-xs text-muted-foreground italic before:content-['"'] after:content-['"']">
-                      {note}
+                    <li key={i} className="text-xs text-muted-foreground italic">
+                      &ldquo;{note}&rdquo;
                     </li>
                   ))}
                 </ul>
+              </div>
+            )}
+
+            {/* ── Retrain button — only shown when RETRAIN is recommended ── */}
+            {status.decision === 'RETRAIN' && (
+              <div className="border-t pt-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium">Model retraining available</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Enough labelled data has accumulated to improve the model.
+                    </p>
+                  </div>
+                  <button
+                    onClick={handleRetrain}
+                    disabled={retrainStatus === 'running' || launching}
+                    className={[
+                      'flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors',
+                      retrainStatus === 'running' || launching
+                        ? 'bg-muted text-muted-foreground cursor-not-allowed'
+                        : 'bg-primary text-primary-foreground hover:bg-primary/90',
+                    ].join(' ')}
+                  >
+                    {retrainStatus === 'running' || launching ? (
+                      <><Loader2 className="h-4 w-4 animate-spin" /> Retraining…</>
+                    ) : (
+                      <><Play className="h-4 w-4" /> Retrain model</>
+                    )}
+                  </button>
+                </div>
+
+                {/* Log output — shown once retraining starts */}
+                {retrainLog && (
+                  <div className="rounded-md border bg-muted/40 overflow-hidden">
+                    <div className="flex items-center justify-between px-3 py-1.5 border-b bg-muted/60">
+                      <span className="text-xs font-mono font-medium text-muted-foreground">
+                        retrain_with_feedback.py
+                      </span>
+                      {retrainStatus === 'done' && (
+                        <span className="text-xs text-green-600 font-medium">✓ Complete</span>
+                      )}
+                      {retrainStatus === 'error' && (
+                        <span className="text-xs text-red-600 font-medium">✗ Error</span>
+                      )}
+                      {retrainStatus === 'running' && (
+                        <span className="flex items-center gap-1 text-xs text-amber-600 font-medium">
+                          <Loader2 className="h-3 w-3 animate-spin" /> Running
+                        </span>
+                      )}
+                    </div>
+                    <pre
+                      ref={logRef}
+                      className="text-xs font-mono p-3 max-h-56 overflow-y-auto whitespace-pre-wrap text-muted-foreground leading-relaxed"
+                    >
+                      {retrainLog}
+                    </pre>
+                  </div>
+                )}
               </div>
             )}
 

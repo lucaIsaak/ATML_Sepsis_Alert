@@ -63,6 +63,20 @@ export function getFeedbackAgentStatus(): Promise<FeedbackAgentStatus> {
   return api.get<FeedbackAgentStatus>('/feedback-agent/status').then((r) => r.data)
 }
 
+export function triggerRetrain(): Promise<{ status: string; message: string }> {
+  return api.post('/retrain').then((r) => r.data)
+}
+
+export function getRetrainStatus(): Promise<{
+  status: 'idle' | 'running' | 'done' | 'error'
+  log: string
+  started_at: string | null
+  finished_at: string | null
+  exit_code: number | null
+}> {
+  return api.get('/retrain/status').then((r) => r.data)
+}
+
 export async function streamNarrative(
   stayId: number,
   modelName: string,
