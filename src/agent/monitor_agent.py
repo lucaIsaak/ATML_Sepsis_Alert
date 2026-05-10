@@ -414,17 +414,28 @@ class PatientMonitorAgent:  # pylint: disable=too-many-instance-attributes
 
         Considers:
         - Current risk score
-        - Rate of deterioration
+        - Rate of deterioration (near-miss rule + rapid-deterioration override)
         - Time since last alert
         - Whether physician has been notified recently
         """
-        # Rapid deterioration overrides score thresholds
+        # Rapid deterioration overrides score thresholds for patients already at nurse tier+
         if mem.is_deteriorating_rapidly and risk_score >= self.threshold_nurse:
             return (
                 EscalationTier.CRITICAL
                 if risk_score >= self.threshold_doctor
                 else EscalationTier.DOCTOR
             )
+
+        # Near-miss rule: patient is below threshold but deteriorating rapidly.
+        # Catches patients whose risk is rising fast before it crosses 0.40 —
+        # a patient at 0.35 trending +0.20 in 3 steps will cross the threshold
+        # within one more cycle; alert the nurse now, not after the fact.
+        _near_miss_low = 0.30
+        if (
+            _near_miss_low <= risk_score < self.threshold_nurse
+            and mem.is_deteriorating_rapidly
+        ):
+            return EscalationTier.NURSE
 
         if risk_score >= self.threshold_critical:
             return EscalationTier.CRITICAL
@@ -473,12 +484,16 @@ class PatientMonitorAgent:  # pylint: disable=too-many-instance-attributes
         """
         Critical tier: log for immediate response.
 
-        In production: trigger pager / EHR alert banner.
+        Production integration point: replace the print below with a call to
+        the hospital's pager API or EHR alert banner (e.g. Epic FHIR Task resource).
+        The FHIR adapter in src/integrations/fhir_adapter.py provides the
+        wire format; the specific endpoint is configured per deployment.
         """
+        # TODO (production): POST to hospital pager / EHR critical alert API here
         print(
             f"[CRITICAL] Stay {stay_id} | score={risk_score:.3f} | "
             f"trend={mem.trend:+.2f} | "
-            f"IMMEDIATE INTERVENTION REQUIRED"
+            f"IMMEDIATE INTERVENTION REQUIRED — physician acknowledgement required"
         )
 
     # ---------------------------------------------------------------- #
