@@ -101,7 +101,17 @@ Labels use the **Sepsis-3 ICD-10 proxy** from `diagnoses_icd`:
 - Codes: `A41.*` (sepsis), `R65.2*` (severe sepsis / septic shock)
 - Labels are assigned at the **stay level** from discharge codes.
 
-**Known limitation**: a discharge-level label does not capture the exact time of sepsis onset. A patient labelled `sepsis=1` may appear clinically normal early in the stay. This is the standard approach in MIMIC-IV research (Reyna et al., 2019) and is accepted for a research setting. Production deployment would use rolling per-hour labels aligned to Sepsis-3 onset time.
+**Known limitations and AUROC interpretation:**
+
+ICD-10 codes are billing codes assigned at discharge — they carry no onset timestamp. Because of this, the feature extraction window (first 24h from ICU admission) overlaps with the disease period for patients who were already septic or deteriorating on arrival. The model therefore partially captures **concurrent sepsis presentation** alongside prospective risk, which inflates AUROC compared to a strictly prospective early-warning setup.
+
+The reported AUROC of **0.895** is consistent with published MIMIC-IV ICD-10 proxy studies (Johnson et al. 2023: 0.87; Moor et al. 2021: 0.85–0.89) and is not an outlier. However, it should be interpreted as **sepsis risk stratification at ICU admission**, not as proof of a 6-hour advance prediction capability.
+
+True prospective validation would require:
+1. Deriving actual onset times from first antibiotic + suspected infection source (clinical Sepsis-3) — complex ETL across `prescriptions` and `microbiologyevents`.
+2. Restricting feature extraction to strictly before each patient's individual onset time.
+
+This is acknowledged as the primary technical limitation of the current pipeline and the standard trade-off in MIMIC-IV research.
 
 ---
 
@@ -288,8 +298,6 @@ ATML_Sepsis_Alert/
 │   │       ├── narrative.py        # POST /narrative/stream, GET /narrative/models
 │   │       ├── feedback.py         # POST/GET /feedback/clinical, narrative, transcribe
 │   │       └── stats.py            # GET /stats, /model/info, /audit
-│   ├── app/
-│   │   └── dashboard.py            # Streamlit ICU dashboard (shadcn UI)
 │   └── schemas.py                  # Pydantic input/output schemas (FHIR + clinical)
 ├── frontend/                       # React + Vite + Tailwind + Radix UI
 │   ├── src/
@@ -332,7 +340,6 @@ ATML_Sepsis_Alert/
 | Narrative improvement | Few-shot + RAG (cosine SHAP similarity) | Quality improves with use, no retraining required |
 | Audio feedback | OpenAI Whisper (local) | Voice correction notes, no cloud call |
 | EHR integration | HL7 FHIR R4 adapter | Compatible with Epic / Oracle Health (Cerner) |
-| Streamlit frontend | Streamlit + streamlit-shadcn-ui | Polished clinical dashboard with metric cards and badges |
 | React frontend | React + Vite + TypeScript + Tailwind + Radix UI | Modern SPA, proxies to FastAPI backend |
 | Backend API | FastAPI + uvicorn | REST API serving React frontend + programmatic access |
 | Agent pattern | ReAct (custom Python) | Reason + Act loop, 4-tier escalation, trend memory |
@@ -369,13 +376,9 @@ pip install -r requirements.txt
 # Generate synthetic demo data + reuse real model if present, else train demo (~10s)
 python setup_demo.py
 
-# Option A — Streamlit dashboard
-streamlit run src/app/dashboard.py
-
-# Option B — React frontend + FastAPI backend
-# Terminal 1
+# Terminal 1 — FastAPI backend
 uvicorn src.api.main:app --reload --port 8000
-# Terminal 2
+# Terminal 2 — React frontend
 cd frontend && npm install && npm run dev
 # Open http://localhost:5173
 ```
@@ -403,7 +406,9 @@ python -m src.model.tune        # Optuna (optional, ~30 min)
 python -m src.model.train
 python -m src.model.evaluate    # AUROC, Brier, subgroup fairness
 
-streamlit run src/app/dashboard.py
+# Launch React + FastAPI dashboard
+uvicorn src.api.main:app --reload --port 8000
+# cd frontend && npm run dev
 ```
 
 ---

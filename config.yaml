@@ -29,7 +29,6 @@ agent:
 
 app:
   title: "SepsisAlert — ICU Early Warning"
-  port: 8501
 
 feedback_agent:
   min_records_to_act:    10    # minimum clinical feedback records before acting
