@@ -19,6 +19,7 @@ Per-patient memory:
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import IntEnum
@@ -145,7 +146,8 @@ class PatientMonitorAgent:  # pylint: disable=too-many-instance-attributes
         self.audit_logger    = AuditLogger(log_path="logs/audit.jsonl")
 
         # SHAP explainer (built lazily on first use)
-        self._explainer   = None
+        self._explainer      = None
+        self._explainer_lock = threading.Lock()
 
         # Per-patient memory
         self._memory: dict[str, PatientMemory] = {}
@@ -179,6 +181,7 @@ class PatientMonitorAgent:  # pylint: disable=too-many-instance-attributes
         instance.narrative_guard = NarrativeGuard()
         instance.audit_logger    = AuditLogger(log_path="logs/audit.jsonl")
         instance._explainer      = None
+        instance._explainer_lock = threading.Lock()
         instance._memory         = {}
         instance.alert_log       = []
         instance.threshold_nurse    = cfg["agent"]["risk_threshold"]
@@ -247,7 +250,9 @@ class PatientMonitorAgent:  # pylint: disable=too-many-instance-attributes
 
         new_alerts: list[AlertRecord] = []
         for _, row in features_df.iterrows():
-            stay_id = str(int(row["stay_id"])) if "stay_id" in row.index else str(_)
+            if "stay_id" not in row.index:
+                raise ValueError("features_df must contain a 'stay_id' column")
+            stay_id = str(int(row["stay_id"]))
             try:
                 alert = self._process_patient(stay_id, row.to_dict(), timestamp)
             except Exception as exc:  # pylint: disable=broad-except
@@ -287,17 +292,6 @@ class PatientMonitorAgent:  # pylint: disable=too-many-instance-attributes
                 self.registry.push(stay_id, obs)
 
         return self.run_cycle(timestamp)
-
-    def acknowledge(self, stay_id: str, role: str = "nurse") -> None:
-        """Mark the latest alert for a patient as acknowledged."""
-        mem = self._get_memory(stay_id)
-        if mem.alert_history:
-            alert = mem.alert_history[-1]
-            if role == "nurse":
-                alert.acknowledged_nurse = True
-            else:
-                alert.acknowledged_doctor = True
-                mem.last_doctor_notification = datetime.now()
 
     # ---------------------------------------------------------------- #
     # ReAct core                                                         #
@@ -390,7 +384,11 @@ class PatientMonitorAgent:  # pylint: disable=too-many-instance-attributes
 
         # === REMEMBER ===
         mem.alert_history.append(alert)
+        if len(mem.alert_history) > 48:
+            mem.alert_history = mem.alert_history[-48:]
         self.alert_log.append(alert)
+        if len(self.alert_log) > 1000:
+            self.alert_log = self.alert_log[-1000:]
 
         # Suppress re-alerting for 2h unless critical
         if tier < EscalationTier.CRITICAL:
@@ -494,17 +492,18 @@ class PatientMonitorAgent:  # pylint: disable=too-many-instance-attributes
         return self._memory[stay_id]
 
     def _get_explainer(self):
-        """Build and cache SHAP explainer (lazy initialisation)."""
-        if self._explainer is None:
-            path = Path(self.cfg["data"]["processed_path"]) / "features.parquet"
-            if path.exists():
-                df = pd.read_parquet(path)
-                background = df[self.artifact["feature_cols"]].dropna().sample(
-                    min(100, len(df)), random_state=42
-                )
-            else:
-                background = pd.DataFrame(columns=self.artifact["feature_cols"])
-            self._explainer = build_explainer(self.artifact["model"], background)
+        """Build and cache SHAP explainer (lazy, thread-safe initialisation)."""
+        with self._explainer_lock:
+            if self._explainer is None:
+                path = Path(self.cfg["data"]["processed_path"]) / "features.parquet"
+                if path.exists():
+                    df = pd.read_parquet(path)
+                    background = df[self.artifact["feature_cols"]].dropna().sample(
+                        min(100, len(df)), random_state=42
+                    )
+                else:
+                    background = pd.DataFrame(columns=self.artifact["feature_cols"])
+                self._explainer = build_explainer(self.artifact["model"], background)
         return self._explainer
 
     def _build_context(self, stay_id: str) -> str:
