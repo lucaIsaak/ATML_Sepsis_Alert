@@ -308,14 +308,23 @@ class PatientMonitorAgent:  # pylint: disable=too-many-instance-attributes
         mem = self._get_memory(stay_id)
 
         # === OBSERVE ===
-        # Layer 1: check inputs before running the model
+        # Layer 1: check inputs — univariate z-score + multivariate Mahalanobis
         ood = self.input_guard.check(features)
         prediction = self._tool_run_model(features)
         risk_score = prediction["risk_score"]
 
+        # Epistemic uncertainty: how much does the prediction vary under small
+        # realistic perturbations?  High variance → novel feature combination.
+        uncertainty = self._tool_estimate_uncertainty(
+            prediction["feature_vector"],
+            prediction["feature_names"],
+        )
+
         # === THINK ===
         mem.record_score(timestamp, risk_score)
-        tier = self._reason_escalation_tier(risk_score, mem, timestamp)
+        tier = self._reason_escalation_tier(
+            risk_score, mem, timestamp, ood=ood, uncertainty=uncertainty
+        )
 
         # No action needed
         if tier == EscalationTier.NONE:
@@ -395,10 +404,13 @@ class PatientMonitorAgent:  # pylint: disable=too-many-instance-attributes
             mem.suppress(hours=2.0, now=timestamp)
 
         ood_flag = f" [{ood.confidence_flag}]" if ood.confidence_flag != "NORMAL" else ""
+        mv_flag  = " [NOVEL-COMBO]" if ood.multivariate_novel else ""
+        ep_flag  = f" [UNCERTAIN:{uncertainty.get('uncertainty_flag','?')}]" \
+                   if uncertainty.get("is_uncertain") else ""
         print(
             f"[{timestamp.strftime('%H:%M')}] "
             f"Stay {stay_id} | {tier.name} | score={risk_score:.3f} | "
-            f"trend={mem.trend:+.2f}{ood_flag}"
+            f"trend={mem.trend:+.2f}{ood_flag}{mv_flag}{ep_flag}"
         )
 
         return alert
@@ -408,15 +420,24 @@ class PatientMonitorAgent:  # pylint: disable=too-many-instance-attributes
         risk_score: float,
         mem: PatientMemory,
         timestamp: datetime,
+        ood=None,
+        uncertainty: dict | None = None,
     ) -> EscalationTier:
         """
         THINK step: decide escalation tier.
 
         Considers:
-        - Current risk score
-        - Rate of deterioration (near-miss rule + rapid-deterioration override)
-        - Time since last alert
-        - Whether physician has been notified recently
+        - Current risk score vs. hard thresholds
+        - Rate of deterioration (rapid worsening overrides thresholds)
+        - Time since last physician notification
+        - Epistemic uncertainty: high prediction variance or novel combination
+          triggers a nurse alert even when the point estimate is below threshold
+
+        The third bullet is what closes the epistemic gap:
+        A patient whose vitals are all individually normal, but whose combination
+        is novel (Mahalanobis > threshold OR MC variance is HIGH) will be surfaced
+        for human review rather than silently discarded.  The agent is acting on
+        what it *doesn't* know.
         """
         # Rapid deterioration overrides score thresholds for patients already at nurse tier+
         if mem.is_deteriorating_rapidly and risk_score >= self.threshold_nurse:
@@ -449,7 +470,52 @@ class PatientMonitorAgent:  # pylint: disable=too-many-instance-attributes
         if risk_score >= self.threshold_nurse:
             return EscalationTier.NURSE
 
+        # ── Epistemic gate ─────────────────────────────────────────────
+        # If the point estimate is below the alert threshold, we would normally
+        # return NONE.  But if the model is epistemically uncertain about this
+        # patient (high MC variance OR novel multivariate combination), we
+        # escalate to NURSE anyway — acting on what we don't know.
+        if self._is_epistemically_uncertain(risk_score, ood, uncertainty):
+            return EscalationTier.NURSE
+
         return EscalationTier.NONE
+
+    @staticmethod
+    def _is_epistemically_uncertain(
+        risk_score: float,
+        ood,
+        uncertainty: dict | None,
+    ) -> bool:
+        """
+        Return True when the model's confidence in its own prediction is low.
+
+        Conditions (any one is sufficient):
+          • OOD multivariate_novel = True (novel feature combination)
+          • MC uncertainty_flag = "HIGH" (wide CI, near many decision boundaries)
+          • CI upper bound crosses the nurse threshold (0.4) even if point estimate
+            is below it — the true risk may already warrant an alert
+
+        The score floor (>= 0.25) prevents completely low-risk patients from
+        being flagged; we only act on uncertainty when the point estimate itself
+        suggests some, albeit sub-threshold, clinical concern.
+        """
+        if risk_score < 0.25:
+            return False   # too low even accounting for uncertainty
+
+        # Novel feature combination (multivariate OOD)
+        if ood is not None and getattr(ood, "multivariate_novel", False):
+            return True
+
+        if uncertainty:
+            # High epistemic variance
+            if uncertainty.get("uncertainty_flag") == "HIGH":
+                return True
+            # CI upper bound reaches the nurse threshold
+            ci_upper = uncertainty.get("ci_upper")
+            if ci_upper is not None and ci_upper >= 0.4:
+                return True
+
+        return False
 
     # ---------------------------------------------------------------- #
     # Tools                                                              #
@@ -458,6 +524,29 @@ class PatientMonitorAgent:  # pylint: disable=too-many-instance-attributes
     def _tool_run_model(self, features: dict) -> dict:
         """Run the sepsis model for one patient and return prediction dict."""
         return predict_patient(features, self.artifact)
+
+    def _tool_estimate_uncertainty(
+        self,
+        feature_vector: np.ndarray,
+        feature_names: list[str],
+    ) -> dict:
+        """
+        Estimate epistemic uncertainty via MC perturbation.
+
+        Returns the uncertainty dict from src.model.uncertainty.estimate_uncertainty.
+        Returns a safe default (LOW, not uncertain) if the estimation fails.
+        """
+        try:
+            from src.model.uncertainty import estimate_uncertainty  # noqa: PLC0415
+            return estimate_uncertainty(
+                model=self.artifact["model"],
+                feature_vector=feature_vector,
+                feature_names=feature_names,
+                training_stats=self.artifact.get("training_stats", {}),
+            )
+        except Exception:  # pylint: disable=broad-except
+            return {"uncertainty_flag": "LOW", "is_uncertain": False,
+                    "ci_upper": None, "ci_lower": None}
 
     def _tool_explain(
         self,

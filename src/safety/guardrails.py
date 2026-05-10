@@ -50,11 +50,14 @@ Three protection layers enforced on every alert cycle:
 from __future__ import annotations
 
 import json
+import math
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+import numpy as np
 
 
 # ------------------------------------------------------------------ #
@@ -137,38 +140,94 @@ class OODResult:
     confidence_flag: str   # "NORMAL" | "CAUTION" | "LOW_CONFIDENCE"
     details: dict[str, str] = field(default_factory=dict)
 
+    # Multivariate OOD fields (populated when training covariance is available)
+    mahalanobis_distance: Optional[float] = None   # distance from training centroid
+    multivariate_novel: bool = False               # True when combination is unusual
+                                                   # even though all features look
+                                                   # normal individually
+
 
 class InputGuard:
     """
     Detect out-of-distribution inputs before model inference.
 
-    Uses training statistics (mean ± std) from the model artifact when
-    available; falls back to hard physiological plausibility bounds.
+    Two complementary checks:
 
-    Thresholds:
-        CAUTION        — 1-2 features > 3σ or outside hard bounds
-        LOW_CONFIDENCE — ≥3 features > 3σ or outside hard bounds
+    Univariate check (always active)
+      Uses per-feature mean ± std from the model artifact when available;
+      falls back to hard physiological plausibility bounds otherwise.
+      Catches individual features that are wildly outside normal range.
+
+      CAUTION        — 1–2 features > 3.5σ or outside hard bounds
+      LOW_CONFIDENCE — ≥3 features > 3.5σ or outside hard bounds
+
+    Multivariate check (active when training covariance is stored in artifact)
+      Computes the Mahalanobis distance of the input from the training
+      centroid.  Unlike the univariate check, this detects unusual *combinations*
+      of individually normal features — the core epistemic gap.
+
+      The threshold is the 99.9th percentile of χ²(d), where d = number of
+      features.  Inputs beyond this threshold are flagged CAUTION even if
+      every individual feature looks normal.
+
+      multivariate_novel = True means: "each feature is within range, but
+      this combination has essentially never appeared in training data."
     """
 
-    def __init__(self, training_stats: Optional[dict] = None):
+    def __init__(
+        self,
+        training_stats: Optional[dict] = None,
+        training_mean: Optional[np.ndarray] = None,
+        training_cov_inv: Optional[np.ndarray] = None,
+        feature_cols: Optional[list[str]] = None,
+    ):
         """
-        Initialise with optional training statistics dict.
+        Initialise with optional training statistics.
 
         training_stats format: {feature_name: {"mean": float, "std": float}}
+        training_mean    : 1-D array aligned to feature_cols
+        training_cov_inv : inverse covariance matrix (d × d), aligned to feature_cols
+        feature_cols     : ordered list of feature names (required for multivariate check)
         """
-        self._stats = training_stats or {}
+        self._stats           = training_stats or {}
+        self._training_mean   = training_mean    # None → multivariate check skipped
+        self._training_cov_inv = training_cov_inv
+        self._feature_cols    = feature_cols or []
+        self._mahal_threshold = self._compute_mahal_threshold(len(self._feature_cols))
+
+    @staticmethod
+    def _compute_mahal_threshold(n_features: int) -> float:
+        """χ²(d) 99.9th percentile → Mahalanobis distance threshold."""
+        if n_features < 1:
+            return float("inf")
+        try:
+            from scipy.stats import chi2  # noqa: PLC0415
+            return float(math.sqrt(chi2.ppf(0.999, df=n_features)))
+        except Exception:  # scipy not available
+            # Conservative fallback: sqrt(d + 4*sqrt(d))
+            return float(math.sqrt(n_features + 4 * math.sqrt(n_features)))
 
     @classmethod
     def from_artifact(cls, artifact: dict) -> "InputGuard":
         """Build an InputGuard from a saved model artifact."""
-        return cls(training_stats=artifact.get("training_stats", {}))
+        return cls(
+            training_stats=artifact.get("training_stats", {}),
+            training_mean=artifact.get("training_mean"),
+            training_cov_inv=artifact.get("training_cov_inv"),
+            feature_cols=list(artifact.get("feature_cols", [])),
+        )
 
     def check(self, features: dict) -> OODResult:
         """
         Check a feature dict for out-of-distribution values.
 
-        Returns OODResult with confidence flag.
+        Runs two complementary checks:
+          1. Univariate z-score / hard-bounds per feature.
+          2. Mahalanobis distance from training centroid (if covariance available).
+
+        Returns OODResult with confidence_flag and multivariate_novel fields.
         """
+        # ── Univariate check ──────────────────────────────────────────
         outliers: list[str] = []
         details: dict[str, str] = {}
 
@@ -204,12 +263,47 @@ class InputGuard:
         else:
             flag = "LOW_CONFIDENCE"
 
+        # ── Multivariate Mahalanobis check ────────────────────────────
+        mahal_dist: Optional[float] = None
+        multivariate_novel = False
+
+        if (
+            self._training_mean is not None
+            and self._training_cov_inv is not None
+            and self._feature_cols
+        ):
+            # Align features to the training feature order; fill NaN with training mean
+            feat_vec = np.array(
+                [features.get(f, float("nan")) for f in self._feature_cols],
+                dtype=float,
+            )
+            nan_mask = np.isnan(feat_vec)
+            feat_vec[nan_mask] = self._training_mean[nan_mask]
+
+            diff = feat_vec - self._training_mean
+            mahal_sq = float(diff @ self._training_cov_inv @ diff)
+            mahal_dist = float(math.sqrt(max(mahal_sq, 0.0)))
+
+            if mahal_dist > self._mahal_threshold:
+                multivariate_novel = True
+                details["[multivariate]"] = (
+                    f"Mahalanobis distance {mahal_dist:.1f} > "
+                    f"threshold {self._mahal_threshold:.1f} — "
+                    f"novel feature combination (all individually normal)"
+                )
+                # Upgrade flag: even if all individual features look fine,
+                # the combination warrants at least CAUTION.
+                if flag == "NORMAL":
+                    flag = "CAUTION"
+
         return OODResult(
-            is_ood=(n > 0),
+            is_ood=(n > 0 or multivariate_novel),
             n_outlier_features=n,
             outlier_features=outliers,
             confidence_flag=flag,
             details=details,
+            mahalanobis_distance=round(mahal_dist, 2) if mahal_dist is not None else None,
+            multivariate_novel=multivariate_novel,
         )
 
 
