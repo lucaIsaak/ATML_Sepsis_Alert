@@ -9,7 +9,6 @@ POST /feedback/transcribe          — transcribe audio to text via Whisper
 
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -129,12 +128,9 @@ async def transcribe_audio_endpoint(file: UploadFile = File(...)):
         )
 
     suffix = Path(file.filename).suffix if file.filename else ".wav"
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        content = await file.read()
-        tmp.write(content)
-        tmp_path = tmp.name
+    content = await file.read()
 
-    # Create a file-like object with a name attribute for transcribe_audio
+    # Wrap bytes in a file-like object that transcribe_audio can read
     class _NamedBytesIO:
         def __init__(self, data: bytes, name: str):
             import io  # noqa: PLC0415
@@ -146,8 +142,4 @@ async def transcribe_audio_endpoint(file: UploadFile = File(...)):
 
     audio_obj = _NamedBytesIO(content, f"audio{suffix}")
     text = transcribe_audio(audio_obj)
-
-    # Clean up temp file
-    Path(tmp_path).unlink(missing_ok=True)
-
     return {"text": text}
