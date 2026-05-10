@@ -99,6 +99,62 @@ See `MODEL_CARD.md` for full safety documentation.
 
 ---
 
+## Data Privacy & GDPR
+
+### Pseudonymization architecture
+
+SepsisAlert never receives, stores, or displays real patient identifiers. The hospital pseudonymizes all patient IDs **before** any data reaches the system:
+
+```
+Hospital side (data controller):
+  hashed_id = HMAC-SHA256(real_patient_id, hospital_secret_key)
+  → sends hashed_id + vitals + labs to SepsisAlert only
+
+SepsisAlert side (data processor):
+  stores hashed_id only — never real_patient_id, name, DOB, or address
+  displays hashed_id in the React UI
+  logs hashed_id in audit trail (logs/audit.jsonl)
+  model training labels reference hashed_id only
+```
+
+**Why HMAC-SHA256 and not plain SHA256:** A plain hash of a short integer patient ID is reversible by brute force. HMAC with a hospital-held secret key is not reversible without the key — only the hospital can map a hash back to a real patient.
+
+### What SepsisAlert processes and why
+
+| Data type | Processed by SepsisAlert | Legal basis |
+|---|---|---|
+| Vitals (HR, MAP, SpO2, RR, Temp) | Yes — required for model inference | Art. 9(2)(h) — medical diagnosis and healthcare |
+| Labs (lactate, WBC, creatinine, etc.) | Yes — required for model inference | Art. 9(2)(h) |
+| Age, gender | Yes — demographic features in model | Art. 9(2)(h) — minimum necessary |
+| Real patient name / DOB / address | Never | Not collected |
+| Real patient ID | Never | Pseudonymized by hospital before ingestion |
+| Voice correction notes (Whisper) | Transcribed locally, stored in logs | Art. 9(2)(h) — stored as clinical feedback, treat as PHI |
+
+Health data (vitals, labs) is GDPR **special category data** under Art. 9 even without a name attached — a combination of vitals, age, and ICU admission time can re-identify a patient in a small unit. Pseudonymization does not exit GDPR scope; it reduces re-identification risk while keeping SepsisAlert unable to identify anyone without the hospital's key.
+
+### Roles and responsibilities
+
+| Party | GDPR role | Obligations |
+|---|---|---|
+| Hospital | **Data controller** | Holds HMAC key, manages patient consent/legal basis, executes right-to-erasure requests |
+| SepsisAlert | **Data processor** | Processes only what the controller sends, under a signed Data Processing Agreement (DPA) per GDPR Art. 28 |
+
+A **Data Processing Agreement** is required between SepsisAlert and each hospital before go-live. The DPA defines: data categories processed, retention periods, sub-processor list, breach notification timelines, and deletion procedures.
+
+### Right to erasure (GDPR Art. 17)
+
+When a hospital submits a deletion request for a patient:
+1. Hospital provides the `hashed_id`
+2. SepsisAlert deletes all records matching that hash: audit log entries, feedback labels, narrative feedback, model training data
+3. Hospital destroys the hash-to-real-ID mapping on their side
+4. After both steps, no party retains linkable data for that patient
+
+### On-premise data residency
+
+All model inference, LLM narrative generation, and audit logging run on hardware within the hospital's own network. No patient data is transmitted to any external API or cloud service when using the Ollama narrative backend. The optional cloud control plane (monitoring, deployment management) handles only operational metadata — no patient feature data, no hashed IDs.
+
+---
+
 ## Sepsis Labelling Strategy
 
 Labels use the **Sepsis-3 ICD-10 proxy** from `diagnoses_icd`:
