@@ -77,6 +77,8 @@ Escalation tiers:
 
 Alert fatigue is addressed by a 2-hour suppression window and trend-based override (rapid deterioration escalates regardless of suppression). A **near-miss rule** fires NURSE alerts for patients below the normal threshold (0.30–0.39) who are deteriorating rapidly — catching patients whose risk is rising fast before it crosses 0.40.
 
+**Why the THINK step is deterministic:** The escalation decision — whether to page a doctor — uses auditable, reproducible logic rather than LLM reasoning. This is a deliberate regulatory choice: EU MDR Class IIb certification requires that every automated clinical decision be fully traceable and reproducible. A non-deterministic LLM in the decision loop cannot satisfy this requirement. The LLM is confined to narrative generation — the one step where variability is acceptable and a human clinician reviews the output before acting. What makes this an agent rather than a simple rule-based system is the stateful per-patient memory, multi-signal reasoning across time, selective tool orchestration, and the `FeedbackLoopAgent` that autonomously decides when to retrain the model.
+
 ---
 
 ## AI Safety — Three-Layer Guardrails
