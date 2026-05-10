@@ -166,6 +166,9 @@ class Observation:
     source: str = "icu"     # "icu" (chartevents) | "lab" (labevents) | "fhir"
     tier: int = 1           # 1 = always available, 2 = conditional
     stream_type: StreamType = StreamType.STREAMING  # STREAMING | BATCH
+    # Set by the stream simulator for routing and evaluation
+    stay_id: Optional[str] = None
+    sepsis_label: Optional[int] = None
 
 
 # ------------------------------------------------------------------ #
@@ -189,12 +192,6 @@ class PatientBuffer:
     stay_id: str
     window_hours: int = 24
     observations: deque = field(default_factory=deque)
-
-    # Alert state
-    last_risk_score: Optional[float] = None
-    last_alert_time: Optional[datetime] = None
-    alert_count: int = 0
-    acknowledged: bool = False
 
     # ---------------------------------------------------------------- #
     # Ingestion — typed by stream                                        #

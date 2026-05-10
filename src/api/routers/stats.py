@@ -113,7 +113,8 @@ def _hot_reload_model() -> None:
             _retrain_state["log"] += "\n[Hot-reload] app reference not set — skipping reload."
         return
 
-    artifact_path = Path("models/sepsis_model.pkl")
+    cfg = app.state.cfg if hasattr(app.state, "cfg") else {}
+    artifact_path = Path(cfg.get("model", {}).get("artifact_path", "models/sepsis_model.pkl"))
     if not artifact_path.exists():
         with _retrain_lock:
             _retrain_state["log"] += "\n[Hot-reload] model file not found — skipping reload."
@@ -246,10 +247,6 @@ def _news2_score(row) -> float:
     return score / 15.0
 
 
-def _compute_news2_score(row) -> float:
-    """Wrapper kept for compatibility — delegates to _news2_score()."""
-    return _news2_score(row)
-
 
 def _pr_curve_auprc(y_true, y_score) -> float:
     """Compute AUPRC (average precision) dynamically from current predictions."""
@@ -375,7 +372,7 @@ async def get_stats(request: Request) -> dict:
     features_df = request.app.state.features_df
     sampled_features = features_df[features_df["stay_id"].isin(predictions["stay_id"])]
     news2_scores = np.array([
-        _compute_news2_score(row) for _, row in sampled_features.iterrows()
+        _news2_score(row) for _, row in sampled_features.iterrows()
     ])
     # Align length with y_true/y_score in case of any mismatch
     news2_scores = news2_scores[: len(y_score)]
