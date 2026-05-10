@@ -7,10 +7,11 @@ POST /narrative/stream  — stream a clinical narrative for a patient
 
 from __future__ import annotations
 
+import re
 import requests
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from src.api.routers.patients import _shap_cache, _ood_cache, _risk_label
 from src.explainability.shap_explainer import SHAPExplanation, format_for_narrative
@@ -28,6 +29,13 @@ router = APIRouter()
 class StreamRequest(BaseModel):
     stay_id: int
     model_name: str
+
+    @field_validator("model_name")
+    @classmethod
+    def validate_model_name(cls, v: str) -> str:
+        if not re.match(r"^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,99}$", v):
+            raise ValueError("model_name contains invalid characters")
+        return v
 
 
 @router.get("/narrative/models")

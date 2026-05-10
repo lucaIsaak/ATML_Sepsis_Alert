@@ -100,9 +100,9 @@ def _extract_shap_vals(shap_values) -> tuple[np.ndarray, float]:
     return shap_values.values[0], float(shap_values.base_values[0])
 
 
-def build_explainer(model, x_background: pd.DataFrame) -> shap.Explainer:
-    """Build a SHAP explainer using a background sample."""
-    return shap.Explainer(model.predict_proba, x_background)
+def build_explainer(model, x_background: pd.DataFrame) -> shap.TreeExplainer:
+    """Build a SHAP TreeExplainer for HistGradientBoosting (100× faster than Permutation)."""
+    return shap.TreeExplainer(model)
 
 
 def explain_patient(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals

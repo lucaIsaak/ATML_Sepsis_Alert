@@ -90,5 +90,5 @@ def predict_batch(df: pd.DataFrame, artifact: dict | None = None) -> pd.DataFram
         bins=[0, 0.4, 0.6, 1.0],
         labels=["LOW", "MODERATE", "HIGH"],
         include_lowest=True,
-    )
+    ).astype(str)
     return result
