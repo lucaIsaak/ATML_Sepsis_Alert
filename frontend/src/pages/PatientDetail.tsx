@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { ChevronDown, ChevronRight, ArrowLeft, CheckCircle, XCircle, Loader2, AlertTriangle, ShieldAlert } from 'lucide-react'
+import { ChevronDown, ChevronRight, ArrowLeft, CheckCircle, XCircle, Loader2, AlertTriangle, ShieldAlert, Brain } from 'lucide-react'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@radix-ui/react-tabs'
 import { getPatientDetail, getClinicalFeedback, saveClinicalFeedback } from '@/api/client'
 import { MetricCard } from '@/components/MetricCard'
@@ -97,7 +97,7 @@ export function PatientDetailPage() {
         </div>
       )}
 
-      {/* OOD warning — backend values: 'NORMAL' | 'CAUTION' | 'LOW_CONFIDENCE' */}
+      {/* OOD warning — individual features: 'NORMAL' | 'CAUTION' | 'LOW_CONFIDENCE' */}
       {patient.ood_flag !== 'NORMAL' && (
         <div className={[
           'rounded-md px-4 py-3 text-sm flex items-start gap-3 border',
@@ -119,6 +119,46 @@ export function PatientDetailPage() {
                 Outlier features: {patient.outlier_features.join(', ')}
               </p>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Multivariate novelty warning — unusual combination of individually normal vitals */}
+      {patient.multivariate_novel && patient.ood_flag === 'NORMAL' && (
+        <div className="rounded-md px-4 py-3 text-sm flex items-start gap-3 border bg-violet-50 text-violet-800 border-violet-200">
+          <Brain className="h-4 w-4 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-semibold">
+              Novel feature combination — each vital is normal, but this pattern is unusual
+            </p>
+            <p className="mt-0.5 text-xs opacity-80">
+              Mahalanobis distance from training centroid:{' '}
+              <strong>{patient.mahalanobis_distance?.toFixed(1) ?? '—'}</strong>.
+              The model has rarely seen this specific combination. Clinical assessment recommended.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Epistemic uncertainty warning — model sensitivity near decision boundary */}
+      {patient.epistemic_uncertainty?.is_uncertain && !patient.multivariate_novel && (
+        <div className={[
+          'rounded-md px-4 py-3 text-sm flex items-start gap-3 border',
+          patient.epistemic_uncertainty.uncertainty_flag === 'HIGH'
+            ? 'bg-violet-50 text-violet-800 border-violet-200'
+            : 'bg-blue-50 text-blue-800 border-blue-200',
+        ].join(' ')}>
+          <Brain className="h-4 w-4 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-semibold">
+              Model uncertainty: {patient.epistemic_uncertainty.uncertainty_flag.toLowerCase()} —
+              confidence interval is wide
+            </p>
+            <p className="mt-0.5 text-xs opacity-80">
+              90% CI: [{patient.epistemic_uncertainty.ci_lower?.toFixed(2) ?? '—'},{' '}
+              {patient.epistemic_uncertainty.ci_upper?.toFixed(2) ?? '—'}].
+              The prediction is sensitive to small input changes. Consider bedside reassessment.
+            </p>
           </div>
         </div>
       )}
@@ -150,7 +190,13 @@ export function PatientDetailPage() {
         <MetricCard
           title="Risk Score"
           value={patient.risk_score.toFixed(3)}
-          description="Model probability (0–1)"
+          description={
+            patient.epistemic_uncertainty?.is_uncertain &&
+            patient.epistemic_uncertainty.ci_lower != null &&
+            patient.epistemic_uncertainty.ci_upper != null
+              ? `90% CI [${patient.epistemic_uncertainty.ci_lower.toFixed(2)}, ${patient.epistemic_uncertainty.ci_upper.toFixed(2)}]`
+              : 'Model probability (0–1)'
+          }
         />
         <MetricCard
           title="Risk Level"

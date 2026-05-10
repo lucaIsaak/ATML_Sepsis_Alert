@@ -19,6 +19,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 import sklearn  # noqa: F401 — must be imported before joblib deserialises sklearn models
+import numpy as np
 import pandas as pd
 import joblib
 import yaml
@@ -103,6 +104,31 @@ async def lifespan(app: FastAPI):
     # Load feature + cohort data
     features_df = pd.read_parquet("data/processed/features.parquet")
     cohort_df   = pd.read_parquet("data/processed/cohort.parquet")
+
+    # ── Augment artifact with multivariate OOD statistics ─────────────
+    # Compute feature mean vector and inverse covariance matrix from the full
+    # training dataset so InputGuard can run the Mahalanobis distance check.
+    # Done in-memory only — the on-disk artifact is NOT modified.
+    try:
+        _fea_cols = artifact.get("feature_cols", [])
+        _X_train  = features_df[_fea_cols].dropna()
+        if len(_X_train) > len(_fea_cols) + 1:
+            _mean    = _X_train.mean().values.astype(float)
+            _cov     = np.cov(_X_train.values.T)
+            _cov_reg = _cov + 1e-6 * np.eye(len(_fea_cols))
+            try:
+                _cov_inv = np.linalg.inv(_cov_reg)
+            except np.linalg.LinAlgError:
+                _cov_inv = np.linalg.pinv(_cov_reg)
+            artifact["training_mean"]    = _mean
+            artifact["training_cov_inv"] = _cov_inv
+            print(
+                f"[Startup] Multivariate OOD ready — "
+                f"{len(_fea_cols)}-feature covariance computed "
+                f"from {len(_X_train):,} training patients."
+            )
+    except Exception as _exc:  # pylint: disable=broad-except
+        print(f"[Startup] Multivariate OOD stats skipped: {_exc}")
 
     # Build initial predictions
     predictions = _build_predictions(features_df, artifact, cohort_df)

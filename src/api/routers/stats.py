@@ -135,10 +135,11 @@ def _hot_reload_model() -> None:
         new_preds = new_preds.merge(cohort_df[display_cols], on="stay_id", how="left")
         app.state.predictions = new_preds
 
-        # Clear per-patient caches so SHAP / OOD are recomputed for new model
+        # Clear per-patient caches so SHAP / OOD / uncertainty are recomputed
         import src.api.routers.patients as _patients_router  # noqa: PLC0415
         _patients_router._shap_cache.clear()
         _patients_router._ood_cache.clear()
+        _patients_router._uncertainty_cache.clear()
         # Reset lazily-built guards so they are rebuilt against the new model weights
         _patients_router._input_guard = None
         _patients_router._explainer   = None

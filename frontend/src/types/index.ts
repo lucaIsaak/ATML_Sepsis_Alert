@@ -14,12 +14,32 @@ export interface ShapFeature {
   feature: string
 }
 
+/** Epistemic uncertainty from MC perturbation (src/model/uncertainty.py) */
+export interface EpistemicUncertainty {
+  point_estimate: number
+  variance: number
+  std: number
+  ci_lower: number | null
+  ci_upper: number | null
+  ci_width: number | null
+  is_uncertain: boolean
+  /** "LOW" | "MODERATE" | "HIGH" */
+  uncertainty_flag: 'LOW' | 'MODERATE' | 'HIGH'
+  n_samples: number
+}
+
 export interface PatientDetail extends Patient {
   shap_top: ShapFeature[]      // top 16 by |shap|, used as top 8 in UI
   shap_bottom: ShapFeature[]   // bottom 8 by |shap|
   // Values from backend guardrails.py: 'NORMAL' | 'CAUTION' | 'LOW_CONFIDENCE'
   ood_flag: 'NORMAL' | 'CAUTION' | 'LOW_CONFIDENCE'
   outlier_features: string[]
+  /** Mahalanobis distance from training centroid (null if covariance not available) */
+  mahalanobis_distance: number | null
+  /** True when feature combination is novel even though all individual features are normal */
+  multivariate_novel: boolean
+  /** MC-perturbation uncertainty estimate */
+  epistemic_uncertainty: EpistemicUncertainty | null
 }
 
 export interface ClinicalFeedback {
