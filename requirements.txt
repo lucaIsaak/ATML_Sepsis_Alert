@@ -14,11 +14,9 @@ ollama>=0.2.0
 requests>=2.31.0
 openai-whisper>=20231117    # local speech-to-text for audio feedback (requires: brew install ffmpeg)
 
-# Frontend
-streamlit>=1.35.0
+# Plotting (used by evaluate.py)
 plotly>=5.20.0
 altair>=5.0.0
-streamlit-shadcn-ui>=0.1.0
 
 # API
 fastapi>=0.111.0

@@ -22,11 +22,12 @@ This output is therefore NOT subject to:
 PURPOSE
 =======
 Generates 5000 synthetic ICU patients and trains a demo model so the
-Streamlit dashboard works immediately without MIMIC-IV credentials.
+React + FastAPI dashboard works immediately without MIMIC-IV credentials.
 
 Usage:
     python setup_demo.py
-    streamlit run src/app/dashboard.py
+    uvicorn src.api.main:app --reload --port 8000
+    cd frontend && npm install && npm run dev
 
 What this creates (all gitignored — no real patient data):
     data/processed/cohort.parquet    ← 5000 synthetic ICU stays
@@ -213,7 +214,9 @@ def main() -> None:
     write_local(cohort, features, artifact)
 
     print("\n  Done. Launch the dashboard with:")
-    print("    streamlit run src/app/dashboard.py\n")
+    print("    uvicorn src.api.main:app --reload --port 8000")
+    print("    cd frontend && npm install && npm run dev")
+    print("    Open http://localhost:5173\n")
 
 
 if __name__ == "__main__":
