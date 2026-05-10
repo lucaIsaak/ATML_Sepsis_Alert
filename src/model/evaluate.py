@@ -55,9 +55,9 @@ def _score_heart_rate(hr: float) -> int:
     """Return NEWS2 points for heart rate."""
     if hr <= 40 or hr >= 131:
         return 3
-    if hr >= 111 or hr <= 50:
+    if hr >= 111:
         return 2
-    if hr >= 91:
+    if hr >= 91 or hr <= 50:
         return 1
     return 0
 

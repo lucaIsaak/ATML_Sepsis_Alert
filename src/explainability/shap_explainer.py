@@ -54,6 +54,18 @@ FEATURE_LABELS = {
     "glucose_last": "Glucose (last)",
     "glucose_mean": "Glucose (mean)",
     "glucose_delta": "Glucose (change)",
+    "heart_rate_trend": "Heart Rate (trend)",
+    "map_trend": "Mean Art. Pressure (trend)",
+    "resp_rate_trend": "Respiratory Rate (trend)",
+    "temperature_f_trend": "Temperature (trend)",
+    "spo2_trend": "SpO2 (trend)",
+    "lactate_trend": "Lactate (trend)",
+    "wbc_trend": "WBC (trend)",
+    "creatinine_trend": "Creatinine (trend)",
+    "bilirubin_trend": "Bilirubin (trend)",
+    "platelets_trend": "Platelets (trend)",
+    "bicarbonate_trend": "Bicarbonate (trend)",
+    "glucose_trend": "Glucose (trend)",
     "age": "Age",
     "gender_male": "Gender (Male)",
 }
@@ -100,9 +112,13 @@ def _extract_shap_vals(shap_values) -> tuple[np.ndarray, float]:
     return shap_values.values[0], float(shap_values.base_values[0])
 
 
-def build_explainer(model, x_background: pd.DataFrame) -> shap.Explainer:
-    """Build a SHAP explainer using a background sample."""
-    return shap.Explainer(model.predict_proba, x_background)
+def build_explainer(model, x_background=None) -> shap.TreeExplainer:
+    """Build a SHAP TreeExplainer for HistGradientBoosting (100× faster than Permutation).
+
+    x_background is accepted for API compatibility but TreeExplainer does not
+    require a background dataset — it uses the model's own tree structure.
+    """
+    return shap.TreeExplainer(model)
 
 
 def explain_patient(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals

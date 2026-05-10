@@ -194,9 +194,9 @@ class MIMICStreamSimulator:
                     source=row["event_type"],
                     tier=int(row["tier"]),
                     stream_type=stream_type,
+                    stay_id=str(int(row["stay_id"])),
+                    sepsis_label=int(row["sepsis_label"]),
                 )
-                obs.stay_id  = str(int(row["stay_id"]))  # attach stay_id for routing
-                obs.sepsis_label = int(row["sepsis_label"])
                 observations.append(obs)
 
             yield current, observations

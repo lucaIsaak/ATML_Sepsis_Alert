@@ -86,17 +86,40 @@ _HARD_BOUNDS: dict[str, tuple[float, float]] = {
     "age":                (18.0,  115.0),
 }
 
-# Patterns the LLM must NOT produce
+# Patterns the LLM must NOT produce.
+# Covers: confirmed diagnoses, definitive treatment orders, dosing instructions,
+# treatment nudges, and resuscitation/DNR language.
 _PROHIBITED_PATTERNS: list[re.Pattern] = [
-    re.compile(r"\bdiagnosed with sepsis\b",      re.IGNORECASE),
-    re.compile(r"\bpatient has sepsis\b",          re.IGNORECASE),
-    re.compile(r"\bsepsis (?:is )?confirmed\b",   re.IGNORECASE),
-    re.compile(r"\bconfirmed sepsis\b",            re.IGNORECASE),
-    re.compile(r"\bstart (?:IV )?antibiotics\b",  re.IGNORECASE),
-    re.compile(r"\badminister (?:immediately)?\b", re.IGNORECASE),
-    re.compile(r"\borgive \d+\b",                  re.IGNORECASE),  # dosing instructions
-    re.compile(r"\bimmediately inject\b",           re.IGNORECASE),
-    re.compile(r"\bdo not\b.*\brescuscitat\b",      re.IGNORECASE),
+    # ── Confirmed diagnosis language ────────────────────────────────────
+    re.compile(r"\bdiagnosed with sepsis\b",               re.IGNORECASE),
+    re.compile(r"\bpatient has sepsis\b",                  re.IGNORECASE),
+    re.compile(r"\bsepsis (?:is )?confirmed\b",            re.IGNORECASE),
+    re.compile(r"\bconfirmed sepsis\b",                    re.IGNORECASE),
+    re.compile(r"\bthis (?:is|represents) sepsis\b",       re.IGNORECASE),
+    re.compile(r"\bseptic shock confirmed\b",              re.IGNORECASE),
+    # ── Definitive treatment orders ─────────────────────────────────────
+    re.compile(r"\bstart (?:IV )?antibiotics\b",           re.IGNORECASE),
+    re.compile(r"\binitiate antibiotic(?:s)?\b",           re.IGNORECASE),
+    re.compile(r"\bbroad.spectrum coverage (?:should|must) be (?:started|initiated)\b",
+               re.IGNORECASE),
+    re.compile(r"\bempiric(?:al)? coverage (?:should|must) be (?:started|initiated)\b",
+               re.IGNORECASE),
+    re.compile(r"\badminister (?:immediately)?\b",         re.IGNORECASE),
+    re.compile(r"\bimmediately inject\b",                  re.IGNORECASE),
+    re.compile(r"\bbegin (?:fluid )?resuscitation\b",      re.IGNORECASE),
+    re.compile(r"\bbolus (?:of )?\d+\b",                   re.IGNORECASE),  # fluid bolus order
+    re.compile(r"\bintubat(?:e|ion)\b",                    re.IGNORECASE),
+    # ── Dosing instructions ─────────────────────────────────────────────
+    re.compile(r"\b(?:give|administer|infuse) \d+\s*(?:mg|mcg|ml|mmol|units?)\b",
+               re.IGNORECASE),
+    re.compile(r"\bpiperacillin\b",                        re.IGNORECASE),  # specific antibiotic names
+    re.compile(r"\bvancomycin\b",                          re.IGNORECASE),
+    re.compile(r"\bmeropenem\b",                           re.IGNORECASE),
+    # ── Resuscitation / DNR language ────────────────────────────────────
+    re.compile(r"\bdo not\b.{0,20}\brescuscitat\b",        re.IGNORECASE),
+    re.compile(r"\bDNR\b",                                  re.IGNORECASE),
+    re.compile(r"\bDNI\b",                                  re.IGNORECASE),
+    re.compile(r"\bwithdraw(?:ing)? (?:care|treatment|support)\b", re.IGNORECASE),
 ]
 
 

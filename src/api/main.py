@@ -9,10 +9,14 @@ Start the frontend:
 """
 
 import asyncio
+import logging
+import traceback
 from contextlib import asynccontextmanager
 from datetime import datetime
 import os
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 import sklearn  # noqa: F401 — must be imported before joblib deserialises sklearn models
 import pandas as pd
@@ -84,7 +88,7 @@ async def _periodic_monitoring(
                 if alerts:
                     print(f"[Monitor] Cycle complete — {len(alerts)} alert(s) dispatched.")
         except Exception as exc:  # pylint: disable=broad-except
-            print(f"[Monitor] Background cycle error: {exc}")
+            logger.error("[Monitor] Background cycle error: %s\n%s", exc, traceback.format_exc())
         await asyncio.sleep(interval_seconds)
 
 

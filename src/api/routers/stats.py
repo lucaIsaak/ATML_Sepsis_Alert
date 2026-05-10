@@ -113,7 +113,8 @@ def _hot_reload_model() -> None:
             _retrain_state["log"] += "\n[Hot-reload] app reference not set — skipping reload."
         return
 
-    artifact_path = Path("models/sepsis_model.pkl")
+    cfg = app.state.cfg if hasattr(app.state, "cfg") else {}
+    artifact_path = Path(cfg.get("model", {}).get("artifact_path", "models/sepsis_model.pkl"))
     if not artifact_path.exists():
         with _retrain_lock:
             _retrain_state["log"] += "\n[Hot-reload] model file not found — skipping reload."
@@ -246,10 +247,6 @@ def _news2_score(row) -> float:
     return score / 15.0
 
 
-def _compute_news2_score(row) -> float:
-    """Wrapper kept for compatibility — delegates to _news2_score()."""
-    return _news2_score(row)
-
 
 def _pr_curve_auprc(y_true, y_score) -> float:
     """Compute AUPRC (average precision) dynamically from current predictions."""
@@ -362,23 +359,28 @@ async def get_stats(request: Request) -> dict:
 
     # Ground truth: merge sepsis_label from cohort_df
     cohort_df = request.app.state.cohort_df
-    label_col = cohort_df[["stay_id", "sepsis_label"]] if "sepsis_label" in cohort_df.columns else None
-    if label_col is not None:
-        merged = predictions[["stay_id", "risk_score"]].merge(label_col, on="stay_id", how="left")
+    if "sepsis_label" in cohort_df.columns:
+        merged = predictions[["stay_id", "risk_score"]].merge(
+            cohort_df[["stay_id", "sepsis_label"]], on="stay_id", how="left"
+        )
         y_true = merged["sepsis_label"].fillna(0).astype(int).values
     else:
-        y_true = (predictions["risk_score"] >= 0.5).astype(int).values
+        # Cohort has no labels — ROC metrics are unavailable
+        y_true = np.zeros(len(predictions), dtype=int)
 
     y_score = predictions["risk_score"].values
 
-    # NEWS2 scores — computed from features_df (has vital-sign columns)
+    # NEWS2 scores — must be in the same row order as predictions/y_true
     features_df = request.app.state.features_df
-    sampled_features = features_df[features_df["stay_id"].isin(predictions["stay_id"])]
+    # Merge on stay_id to guarantee alignment; fill missing with 0
+    news2_df = features_df[features_df["stay_id"].isin(predictions["stay_id"])].copy()
+    news2_map = {
+        int(row["stay_id"]): _news2_score(row)
+        for _, row in news2_df.iterrows()
+    }
     news2_scores = np.array([
-        _compute_news2_score(row) for _, row in sampled_features.iterrows()
+        news2_map.get(int(sid), 0.0) for sid in predictions["stay_id"]
     ])
-    # Align length with y_true/y_score in case of any mismatch
-    news2_scores = news2_scores[: len(y_score)]
 
     # ROC curves
     roc_sepsis = _roc_curve_points(y_true, y_score)
