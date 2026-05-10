@@ -180,8 +180,10 @@ Every alert is written to an append-only JSONL audit log including: timestamp, r
 ### Regulatory context
 - **EU MDR:** This system is classified as a **Class IIb** medical device under EU MDR 2017/745 (software intended to support clinical decisions with diagnosis/treatment impact in high-acuity settings — Rule 11). CE marking via a Notified Body is required before commercial deployment. Target: H2 2027.
 - **EU AI Act:** This system is a high-risk AI system under Annex III (medical device, clinical decision support). Technical documentation and audit logging are included per Art. 11 and Annex IV requirements.
-- **GDPR:** All inference runs locally. No patient data is transmitted to external APIs when using the Ollama narrative backend.
-- **HIPAA:** Intended for on-premise deployment. Claude API narrative mode should only be used in HIPAA Business Associate Agreement (BAA) contexts.
+- **GDPR — Pseudonymization:** SepsisAlert never receives real patient identifiers. Hospitals pseudonymize patient IDs using HMAC-SHA256 (hospital-held key) before any data reaches the system. SepsisAlert operates as a **data processor** (Art. 28); the hospital is the data controller. A signed Data Processing Agreement is required per hospital before go-live. Health data (vitals, labs) remains special category data under Art. 9 even after pseudonymization — GDPR scope is not exited, but re-identification risk is eliminated on the SepsisAlert side. Voice correction notes transcribed by Whisper are stored locally and must be treated as protected health information.
+- **GDPR — Data minimization (Art. 5(1)(c)):** Only the minimum data required for clinical inference is processed: vitals, labs, age, gender, and hashed stay ID. No names, dates of birth, addresses, or insurance identifiers are collected at any point.
+- **GDPR — Right to erasure (Art. 17):** Deletion requests reference the hashed ID. SepsisAlert purges all matching audit log, feedback, and training label records. The hospital destroys the hash-to-real-ID mapping.
+- **HIPAA:** Intended for on-premise deployment. The Ollama narrative backend ensures no PHI leaves the hospital network. Any cloud-based LLM integration must operate under a signed HIPAA Business Associate Agreement (BAA).
 
 ---
 
