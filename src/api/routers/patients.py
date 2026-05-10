@@ -7,6 +7,8 @@ GET /patients/{stay_id}  — patient detail + SHAP features
 
 from __future__ import annotations
 
+import threading
+
 import numpy as np
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Request
@@ -18,8 +20,9 @@ router = APIRouter()
 # Module-level caches so SHAP and OOD checks are only computed once per patient
 _shap_cache: dict[int, list[dict]] = {}
 _ood_cache:  dict[int, dict] = {}       # stay_id → {flag, outlier_features}
-_explainer   = None   # lazily initialised on first SHAP request
-_input_guard = None   # lazily initialised on first OOD request
+_explainer        = None   # lazily initialised on first SHAP request
+_explainer_lock   = threading.Lock()
+_input_guard      = None   # lazily initialised on first OOD request
 _audit_logger = AuditLogger(log_path="logs/audit.jsonl")
 
 
@@ -33,17 +36,12 @@ def _get_input_guard(artifact: dict):
 
 
 def _get_explainer(artifact: dict, features_df: pd.DataFrame):
-    """Build (or return cached) SHAP explainer backed by a 100-row background."""
+    """Build (or return cached) SHAP TreeExplainer (thread-safe lazy init)."""
     global _explainer  # noqa: PLW0603
-    if _explainer is None:
-        from src.explainability.shap_explainer import build_explainer  # noqa: PLC0415
-        feature_cols = artifact["feature_cols"]
-        background = (
-            features_df[feature_cols]
-            .dropna()
-            .sample(n=min(100, len(features_df)), random_state=42)
-        )
-        _explainer = build_explainer(artifact["model"], background)
+    with _explainer_lock:
+        if _explainer is None:
+            from src.explainability.shap_explainer import build_explainer  # noqa: PLC0415
+            _explainer = build_explainer(artifact["model"])
     return _explainer
 
 

@@ -200,9 +200,9 @@ def _cosine_similarity(a: dict[str, float], b: dict[str, float]) -> float:
     if not common_keys:
         return 0.0
 
-    dot = sum(a[k] * b[k] for k in common_keys)
-    mag_a = math.sqrt(sum(v * v for v in a.values()))
-    mag_b = math.sqrt(sum(v * v for v in b.values()))
+    dot   = sum(a[k] * b[k] for k in common_keys)
+    mag_a = math.sqrt(sum(a[k] ** 2 for k in common_keys))
+    mag_b = math.sqrt(sum(b[k] ** 2 for k in common_keys))
 
     if mag_a == 0.0 or mag_b == 0.0:
         return 0.0

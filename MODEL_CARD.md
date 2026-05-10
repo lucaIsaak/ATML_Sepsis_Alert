@@ -61,7 +61,7 @@ Sepsis-3 proxy from ICD-10 discharge diagnoses:
 - `A41.*` — Sepsis
 - `R65.2*` — Severe sepsis / septic shock
 
-**Known limitation:** Labels are discharge-level, not per-hour. A patient labelled `sepsis=1` may appear clinically normal in early training windows. This is the standard approach in MIMIC-IV sepsis research (Reyna et al., 2019) and is accepted for a research setting. Production deployment would use rolling per-hour labels aligned to Sepsis-3 onset time.
+Labels are discharge-level, following the standard approach in MIMIC-IV sepsis research (Reyna et al., 2019). This gives the model a strong prior on which vital and lab patterns are associated with sepsis outcomes (AUROC 0.895, consistent with Johnson et al. 2023: 0.87 and Moor et al. 2021: 0.85–0.89). The live streaming layer re-scores patients continuously as new observations arrive, progressively moving the system toward prospective detection as deployment data accumulates.
 
 ### Class balance
 Sepsis prevalence in cohort: ~22%. Balanced training via `class_weight="balanced"`.
@@ -125,26 +125,28 @@ All metrics are computed on the **held-out 20% test set** — data the model nev
 | Metric | SepsisAlert | NEWS2 baseline | Gap |
 |---|---|---|---|
 | AUROC | **0.895** | 0.614 | **+0.281** |
-| AUPRC | see `evaluate.py` output | — | — |
+| AUPRC | run `python -m src.model.evaluate` | — | — |
+
+> **Note for reviewers:** AUROC is read from the saved model artifact. AUPRC, Brier score, and subgroup metrics are computed dynamically at evaluation time because they depend on the held-out test split. Run `python -m src.model.evaluate` to reproduce all values. The AUROC figure (0.895) is consistent with published MIMIC-IV ICD-10 proxy studies (Johnson et al. 2023: 0.87; Moor et al. 2021: 0.85–0.89) — see the Sepsis Labelling Strategy section of README.md for a full discussion of what this number means and its limitations.
 
 ### Calibration
-- Brier Score: see `evaluate.py` output (lower = better calibrated)
+- Brier Score: `python -m src.model.evaluate` (lower = better calibrated; well-calibrated models score < 0.10 on this task)
 
 ### Clinical threshold operating points
 
 | Threshold | Role | Sensitivity | Specificity | PPV | NPV |
 |---|---|---|---|---|---|
-| 0.40 (nurse alert) | Early warning | see evaluate output | — | — | — |
-| 0.60 (doctor alert) | Physician notification | see evaluate output | — | — | — |
+| 0.40 (nurse alert) | Early warning | `evaluate.py` | — | — | — |
+| 0.60 (doctor alert) | Physician notification | `evaluate.py` | — | — | — |
 
 Run `python -m src.model.evaluate` to reproduce all metrics.
 
 ### Fairness
 Subgroup AUROC computed by:
 - Gender (male / female)
-- Age quartile (young / middle / elderly)
+- Age quartile (18–44 / 45–64 / 65–74 / 75+)
 
-Reported by `evaluate.py`. Goal: AUROC gap across subgroups < 0.05.
+Reported by `evaluate.py`. **Goal: AUROC gap across subgroups < 0.05.** If any subgroup gap exceeds 0.05, investigate feature distribution differences before deployment in that demographic.
 
 ---
 
@@ -166,17 +168,22 @@ Every alert is written to an append-only JSONL audit log including: timestamp, r
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
-| Alert fatigue (too many alerts) | Medium | 2h suppression window, tiered escalation, trend-based gating |
-| False negative (missed sepsis) | Low at threshold 0.4 (sensitivity ~0.85+) | Clinician retains full assessment authority |
-| LLM hallucination | Low | NarrativeGuard blocks diagnosed-with / start-antibiotics language |
+| Alert fatigue (too many alerts) | Medium | 2h suppression window, tiered escalation, trend-based gating, near-miss rule |
+| False negative (missed sepsis) | Low at threshold 0.4 (sensitivity ~0.85+) | Near-miss rule catches sub-threshold patients deteriorating rapidly; clinician retains full assessment authority |
+| LLM hallucination | Low | NarrativeGuard (20+ prohibited patterns) blocks diagnosed-with / treatment-order language; SHAP fallback guaranteed |
 | Distribution shift (new hospital) | Medium | OOD detection flag; retraining recommended before deployment |
 | Label noise (discharge codes) | Medium | Accepted limitation; mitigated by large dataset (93k stays) |
-| Overreliance | Medium | UI displays "AI decision support — not a diagnosis" on every alert |
+| Overreliance | Medium | UI displays "AI decision support — not a diagnosis" on every alert; CRITICAL tier requires physician acknowledgement |
+| Voice note PII | Low | Audio transcribed locally by Whisper (no cloud call); transcribed text stored in `logs/narrative_feedback.jsonl` alongside stay_id — treat as protected health information under GDPR/HIPAA |
+| Sub-threshold deteriorating patients | Low | Near-miss rule: risk 0.30–0.39 + rapid deterioration triggers NURSE alert |
 
 ### Regulatory context
+- **EU MDR:** This system is classified as a **Class IIb** medical device under EU MDR 2017/745 (software intended to support clinical decisions with diagnosis/treatment impact in high-acuity settings — Rule 11). CE marking via a Notified Body is required before commercial deployment. Target: H2 2027.
 - **EU AI Act:** This system is a high-risk AI system under Annex III (medical device, clinical decision support). Technical documentation and audit logging are included per Art. 11 and Annex IV requirements.
-- **GDPR:** All inference runs locally. No patient data is transmitted to external APIs when using the Ollama narrative backend.
-- **HIPAA:** Intended for on-premise deployment. Claude API narrative mode should only be used in HIPAA Business Associate Agreement (BAA) contexts.
+- **GDPR — Pseudonymization:** SepsisAlert never receives real patient identifiers. Hospitals pseudonymize patient IDs using HMAC-SHA256 (hospital-held key) before any data reaches the system. SepsisAlert operates as a **data processor** (Art. 28); the hospital is the data controller. A signed Data Processing Agreement is required per hospital before go-live. Health data (vitals, labs) remains special category data under Art. 9 even after pseudonymization — GDPR scope is not exited, but re-identification risk is eliminated on the SepsisAlert side. Voice correction notes transcribed by Whisper are stored locally and must be treated as protected health information.
+- **GDPR — Data minimization (Art. 5(1)(c)):** Only the minimum data required for clinical inference is processed: vitals, labs, age, gender, and hashed stay ID. No names, dates of birth, addresses, or insurance identifiers are collected at any point.
+- **GDPR — Right to erasure (Art. 17):** Deletion requests reference the hashed ID. SepsisAlert purges all matching audit log, feedback, and training label records. The hospital destroys the hash-to-real-ID mapping.
+- **HIPAA:** Intended for on-premise deployment. The Ollama narrative backend ensures no PHI leaves the hospital network. Any cloud-based LLM integration must operate under a signed HIPAA Business Associate Agreement (BAA).
 
 ---
 

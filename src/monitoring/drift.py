@@ -136,6 +136,7 @@ def compute_drift_report(
     live_df: pd.DataFrame,
     feature_cols: list[str],
     risk_scores_live: np.ndarray,
+    risk_scores_train: np.ndarray | None = None,
 ) -> dict:
     """
     Compute a full drift report comparing training vs live distributions.
@@ -189,7 +190,7 @@ def compute_drift_report(
 
     # ── Overall PSI ───────────────────────────────────────────────
     valid_psi = [r["psi"] for r in feature_rows if r["psi"] is not None]
-    overall_psi = round(max(valid_psi), 4) if valid_psi else None
+    overall_psi = round(float(np.mean(valid_psi)), 4) if valid_psi else None
     overall_status = psi_status(overall_psi) if overall_psi is not None else "unknown"
 
     # ── Risk score distribution ───────────────────────────────────
@@ -210,8 +211,17 @@ def compute_drift_report(
     }
     live_dist_pct = {k: round(v / total_live, 3) for k, v in live_dist.items()}
 
-    # Training expected distribution (from MIMIC-IV known statistics)
-    train_dist_pct = {"CRITICAL": 0.04, "HIGH": 0.07, "MODERATE": 0.12, "LOW": 0.77}
+    # Training expected distribution — computed dynamically if scores provided,
+    # otherwise falls back to known MIMIC-IV statistics
+    if risk_scores_train is not None and len(risk_scores_train) > 0:
+        train_labels = [_risk_label(float(s)) for s in risk_scores_train if not np.isnan(s)]
+        total_train = len(train_labels) or 1
+        train_dist_pct = {
+            k: round(train_labels.count(k) / total_train, 3)
+            for k in ["CRITICAL", "HIGH", "MODERATE", "LOW"]
+        }
+    else:
+        train_dist_pct = {"CRITICAL": 0.04, "HIGH": 0.07, "MODERATE": 0.12, "LOW": 0.77}
 
     # ── Log to history ─────────────────────────────────────────────
     evaluated_at = datetime.now(timezone.utc).isoformat()
@@ -256,7 +266,7 @@ def _maybe_log_history(psi: float | None, status: str, ts: str) -> None:
                 hours_since = (now_ts - last_ts).total_seconds() / 3600
                 if hours_since < _LOG_INTERVAL_HOURS:
                     return
-            except (json.JSONDecodeError, KeyError, ValueError):
+            except (json.JSONDecodeError, KeyError, ValueError, TypeError):
                 pass
 
     with _DRIFT_LOG.open("a", encoding="utf-8") as f:

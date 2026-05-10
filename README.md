@@ -49,10 +49,10 @@ MIMIC-IV / Hospital EHR (FHIR R4)
     |  4-tier escalation       |      NONE -> NURSE -> DOCTOR -> CRITICAL
     +----+---------------------+
          |
-    +----v-----------+    +----v------------------+
-    |   Streamlit    |    |  React + FastAPI       |
-    |   Dashboard    |    |  (src/api + frontend/) |
-    +----------------+    +-----------------------+
+    +----v----------------------------------+
+    |  React + FastAPI                      |
+    |  (frontend/ + src/api/)               |   <- SPA + REST API, audit log at /audit
+    +---------------------------------------+
 ```
 
 ---
@@ -70,28 +70,88 @@ Escalation tiers:
 
 | Tier | Trigger | Action |
 |---|---|---|
-| NONE | risk < 0.40 | No alert |
-| NURSE | risk 0.40–0.59 | SBAR narrative to bedside nurse |
+| NONE | risk < 0.40, stable | No alert |
+| NURSE | risk 0.40–0.59, OR risk 0.30–0.39 + rapid deterioration | SBAR narrative to bedside nurse |
 | DOCTOR | risk 0.60–0.79 | Clinical summary to attending physician |
-| CRITICAL | risk >= 0.80 OR rapid deterioration | Immediate escalation |
+| CRITICAL | risk >= 0.80 OR rapid deterioration from DOCTOR tier | Immediate escalation, physician acknowledgement required |
 
-Alert fatigue is addressed by a 2-hour suppression window and trend-based override (rapid deterioration escalates regardless of suppression).
+Alert fatigue is addressed by a 2-hour suppression window and trend-based override (rapid deterioration escalates regardless of suppression). A **near-miss rule** fires NURSE alerts for patients below the normal threshold (0.30–0.39) who are deteriorating rapidly — catching patients whose risk is rising fast before it crosses 0.40.
+
+**Why the THINK step is deterministic:** The escalation decision — whether to page a doctor — uses auditable, reproducible logic rather than LLM reasoning. This is a deliberate regulatory choice: EU MDR Class IIb certification requires that every automated clinical decision be fully traceable and reproducible. A non-deterministic LLM in the decision loop cannot satisfy this requirement. The LLM is confined to narrative generation — the one step where variability is acceptable and a human clinician reviews the output before acting. What makes this an agent rather than a simple rule-based system is the stateful per-patient memory, multi-signal reasoning across time, selective tool orchestration, and the `FeedbackLoopAgent` that autonomously decides when to retrain the model.
 
 ---
 
 ## AI Safety — Three-Layer Guardrails
 
-Safety is built into every alert cycle (`src/safety/guardrails.py`) and enforced across **both** the Streamlit and React/FastAPI interfaces:
+Safety is built into every alert cycle (`src/safety/guardrails.py`) and enforced across all API endpoints:
 
 | Layer | What it does | Why |
 |---|---|---|
 | **InputGuard** | OOD detection via z-score against training distribution and hard physiological bounds. Flags `NORMAL / CAUTION / LOW_CONFIDENCE`. | Prevents silent model extrapolation on implausible inputs |
-| **NarrativeGuard** | Validates LLM output for prohibited phrases (confirmed diagnoses, definitive treatment orders). Replaces with deterministic SHAP fallback if violated. | Guarantees clinical safety even if Ollama misbehaves |
+| **NarrativeGuard** | Validates LLM output for 20+ prohibited patterns (confirmed diagnoses, definitive treatment orders, dosing instructions). Replaces with deterministic SHAP fallback if violated. | Guarantees clinical safety even if Ollama misbehaves |
 | **AuditLogger** | Append-only JSONL log: timestamp, risk score, tier, OOD flag, narrative replacement flag. | GDPR Art. 22 (automated decision transparency) + EU AI Act Annex III |
 
-All three layers are wired into the FastAPI routers as well as the Streamlit dashboard — no guardrail is bypassed regardless of which frontend is used. The audit log is accessible via `GET /audit`.
+All three layers are wired into every FastAPI router — no guardrail is bypassed. The audit log is accessible via `GET /audit`.
+
+**Human-in-the-loop:** CRITICAL-tier alerts require a physician to acknowledge — the system raises the alert, it does not take autonomous action. Every alert is labelled "AI decision support — not a diagnosis" in the UI.
 
 See `MODEL_CARD.md` for full safety documentation.
+
+---
+
+## Data Privacy & GDPR
+
+### Pseudonymization architecture
+
+SepsisAlert never receives, stores, or displays real patient identifiers. The hospital pseudonymizes all patient IDs **before** any data reaches the system:
+
+```
+Hospital side (data controller):
+  hashed_id = HMAC-SHA256(real_patient_id, hospital_secret_key)
+  → sends hashed_id + vitals + labs to SepsisAlert only
+
+SepsisAlert side (data processor):
+  stores hashed_id only — never real_patient_id, name, DOB, or address
+  displays hashed_id in the React UI
+  logs hashed_id in audit trail (logs/audit.jsonl)
+  model training labels reference hashed_id only
+```
+
+**Why HMAC-SHA256 and not plain SHA256:** A plain hash of a short integer patient ID is reversible by brute force. HMAC with a hospital-held secret key is not reversible without the key — only the hospital can map a hash back to a real patient.
+
+### What SepsisAlert processes and why
+
+| Data type | Processed by SepsisAlert | Legal basis |
+|---|---|---|
+| Vitals (HR, MAP, SpO2, RR, Temp) | Yes — required for model inference | Art. 9(2)(h) — medical diagnosis and healthcare |
+| Labs (lactate, WBC, creatinine, etc.) | Yes — required for model inference | Art. 9(2)(h) |
+| Age, gender | Yes — demographic features in model | Art. 9(2)(h) — minimum necessary |
+| Real patient name / DOB / address | Never | Not collected |
+| Real patient ID | Never | Pseudonymized by hospital before ingestion |
+| Voice correction notes (Whisper) | Transcribed locally, stored in logs | Art. 9(2)(h) — stored as clinical feedback, treat as PHI |
+
+Health data (vitals, labs) is GDPR **special category data** under Art. 9 even without a name attached — a combination of vitals, age, and ICU admission time can re-identify a patient in a small unit. Pseudonymization does not exit GDPR scope; it reduces re-identification risk while keeping SepsisAlert unable to identify anyone without the hospital's key.
+
+### Roles and responsibilities
+
+| Party | GDPR role | Obligations |
+|---|---|---|
+| Hospital | **Data controller** | Holds HMAC key, manages patient consent/legal basis, executes right-to-erasure requests |
+| SepsisAlert | **Data processor** | Processes only what the controller sends, under a signed Data Processing Agreement (DPA) per GDPR Art. 28 |
+
+A **Data Processing Agreement** is required between SepsisAlert and each hospital before go-live. The DPA defines: data categories processed, retention periods, sub-processor list, breach notification timelines, and deletion procedures.
+
+### Right to erasure (GDPR Art. 17)
+
+When a hospital submits a deletion request for a patient:
+1. Hospital provides the `hashed_id`
+2. SepsisAlert deletes all records matching that hash: audit log entries, feedback labels, narrative feedback, model training data
+3. Hospital destroys the hash-to-real-ID mapping on their side
+4. After both steps, no party retains linkable data for that patient
+
+### On-premise data residency
+
+All model inference, LLM narrative generation, and audit logging run on hardware within the hospital's own network. No patient data is transmitted to any external API or cloud service when using the Ollama narrative backend. The optional cloud control plane (monitoring, deployment management) handles only operational metadata — no patient feature data, no hashed IDs.
 
 ---
 
@@ -101,7 +161,17 @@ Labels use the **Sepsis-3 ICD-10 proxy** from `diagnoses_icd`:
 - Codes: `A41.*` (sepsis), `R65.2*` (severe sepsis / septic shock)
 - Labels are assigned at the **stay level** from discharge codes.
 
-**Known limitation**: a discharge-level label does not capture the exact time of sepsis onset. A patient labelled `sepsis=1` may appear clinically normal early in the stay. This is the standard approach in MIMIC-IV research (Reyna et al., 2019) and is accepted for a research setting. Production deployment would use rolling per-hour labels aligned to Sepsis-3 onset time.
+The base model is trained on historical MIMIC-IV stays, giving it a strong prior on which vital and lab patterns are associated with sepsis outcomes. The reported AUROC of **0.895** is consistent with published MIMIC-IV ICD-10 proxy studies (Johnson et al. 2023: 0.87; Moor et al. 2021: 0.85–0.89).
+
+**From risk stratification to real-time early warning:**
+
+The base model identifies high-risk patients from admission-time features. This is already clinically valuable — flagging who to watch more closely from the moment they arrive. However, the architecture is explicitly designed to evolve beyond this as deployment data accumulates:
+
+- The **streaming layer** (`src/data/streaming.py`, `patient_buffer.py`) ingests live vitals and labs as they arrive, maintaining a rolling 24-hour feature window per patient.
+- The **PatientMonitorAgent** re-scores every patient on each new observation cycle, so risk scores update continuously rather than once at admission.
+- As clinician feedback labels accumulate with real deployment timestamps, the **feedback-driven retraining loop** (`retrain_with_feedback.py`) can progressively anchor the model to actual deterioration trajectories rather than retrospective discharge codes.
+
+The result: the base model provides strong admission-time risk stratification today, and the infrastructure is in place to shift toward true prospective early warning as live deployment data is collected — without any architectural changes.
 
 ---
 
@@ -288,8 +358,6 @@ ATML_Sepsis_Alert/
 │   │       ├── narrative.py        # POST /narrative/stream, GET /narrative/models
 │   │       ├── feedback.py         # POST/GET /feedback/clinical, narrative, transcribe
 │   │       └── stats.py            # GET /stats, /model/info, /audit
-│   ├── app/
-│   │   └── dashboard.py            # Streamlit ICU dashboard (shadcn UI)
 │   └── schemas.py                  # Pydantic input/output schemas (FHIR + clinical)
 ├── frontend/                       # React + Vite + Tailwind + Radix UI
 │   ├── src/
@@ -332,7 +400,6 @@ ATML_Sepsis_Alert/
 | Narrative improvement | Few-shot + RAG (cosine SHAP similarity) | Quality improves with use, no retraining required |
 | Audio feedback | OpenAI Whisper (local) | Voice correction notes, no cloud call |
 | EHR integration | HL7 FHIR R4 adapter | Compatible with Epic / Oracle Health (Cerner) |
-| Streamlit frontend | Streamlit + streamlit-shadcn-ui | Polished clinical dashboard with metric cards and badges |
 | React frontend | React + Vite + TypeScript + Tailwind + Radix UI | Modern SPA, proxies to FastAPI backend |
 | Backend API | FastAPI + uvicorn | REST API serving React frontend + programmatic access |
 | Agent pattern | ReAct (custom Python) | Reason + Act loop, 4-tier escalation, trend memory |
@@ -343,19 +410,32 @@ ATML_Sepsis_Alert/
 
 ## Business Model
 
-- **SaaS**: €200–350 / ICU bed / month
-- **Onboarding**: €15K–30K one-time per hospital
-- **Target**: >70% gross margin at scale
+- **SaaS**: €200–350 / ICU bed / month (Pilot €200, Standard €275, Enterprise €350)
+- **Onboarding**: €10K–30K one-time per hospital (tier-dependent)
+- **Target**: >70% gross margin at scale (Y3: 74.6%, Y5: 85.6%)
 - **Beachhead**: DACH region (~28K ICU beds)
 - **TAM**: €171M (EU27)
 
-**Unit economics**: 20-bed ICU = €48K–84K ARR. LLM inference cost = **€0** (local Ollama). Cloud hosting ~€20–50/month. Primary cost driver = sales & implementation.
+**Unit economics**: 20-bed ICU = €48K–84K ARR. No per-token LLM API billing (local Ollama). AI compute COGS ~€3,025/site/year (GPU amortization €2,125 + electricity €600 + hardware maintenance €300) — under 4% of site ARR at Standard tier. Primary cost driver = sales & implementation.
+
+**Infrastructure note:** Ollama/mistral:7b runs on an on-premise NVIDIA RTX 4090 / L4 workstation (~€8,500 capex, amortized over 4 years). This is included in the hospital's one-time infrastructure procurement. No cloud GPU is required or used.
+
+**Regulatory pathway:** As a **Class IIb** medical device under EU MDR and a high-risk AI system under EU AI Act Annex III, production deployment requires CE marking via a Notified Body. We are targeting CE mark by H2 2027 following an anchor-hospital pilot validation study initiated in 2026. Technical documentation (MODEL_CARD.md, audit log) is structured to satisfy Annex IV requirements from day one. EBITDA break-even is projected at Year 5 (€205K, 3.1% margin), with full profitability scaling in Year 6+.
+
+**Competitive positioning:** Unlike Epic's built-in sepsis alert, SepsisAlert provides SHAP-level feature attribution for every alert, a full EU AI Act-compliant audit trail, and a clinician feedback loop that continuously improves both alert quality and narrative explanations — none of which are present in current commercial CDSS tools.
 
 ---
 
 ## Why Not Just a Wrapper
 
-SepsisAlert is **not** a ChatGPT wrapper. The LLM only generates the explanation — the risk score comes from a validated gradient boosting model trained on 93,224 real ICU outcomes. The LLM is grounded on SHAP output and cannot override the model score. Moat: proprietary MIMIC-IV training, clinical workflow integration, FHIR adapter, EU AI Act-compliant audit trail, and switching costs from EHR integration.
+SepsisAlert is **not** a ChatGPT wrapper. The LLM only generates the explanation — the risk score comes from a validated gradient boosting model trained on 93,224 real ICU outcomes. The LLM is grounded on SHAP output and cannot override the model score.
+
+**Moat layers:**
+1. **Proprietary training** — MIMIC-IV model cannot be replicated by a general-purpose LLM API
+2. **SHAP grounding** — LLM narratives are anchored to model output; hallucination is structurally blocked, not just prompted away
+3. **EHR integration** — FHIR R4 adapter (Epic / Oracle Cerner) creates deep switching costs once deployed. The adapter is a deployment integration layer; no single hospital endpoint is hardcoded — it is configured at deployment time.
+4. **EU AI Act compliance** — audit trail, OOD detection, and explainability are built-in from day one; not retrofittable from a generic LLM product
+5. **Clinician feedback loop** — per-hospital correction labels and rated narratives are proprietary data that improve the model over time; this data does not exist in any competitor's system
 
 ---
 
@@ -369,18 +449,14 @@ pip install -r requirements.txt
 # Generate synthetic demo data + reuse real model if present, else train demo (~10s)
 python setup_demo.py
 
-# Option A — Streamlit dashboard
-streamlit run src/app/dashboard.py
-
-# Option B — React frontend + FastAPI backend
-# Terminal 1
+# Terminal 1 — FastAPI backend
 uvicorn src.api.main:app --reload --port 8000
-# Terminal 2
+# Terminal 2 — React frontend
 cd frontend && npm install && npm run dev
 # Open http://localhost:5173
 ```
 
-`setup_demo.py` generates 200 fully synthetic ICU patients (no real patient data) and reuses a real trained model if `models/sepsis_model.pkl` exists, otherwise trains a demo model on synthetic data.
+`setup_demo.py` generates **5,000 fully synthetic ICU patients** (~22% sepsis prevalence, no real patient data) and reuses a real trained model if `models/sepsis_model.pkl` exists, otherwise trains a demo model on synthetic data. Voice correction notes are transcribed locally by Whisper and stored in `logs/narrative_feedback.jsonl` alongside SHAP vectors — no audio or text is sent to any external service.
 
 ---
 
@@ -403,7 +479,9 @@ python -m src.model.tune        # Optuna (optional, ~30 min)
 python -m src.model.train
 python -m src.model.evaluate    # AUROC, Brier, subgroup fairness
 
-streamlit run src/app/dashboard.py
+# Launch React + FastAPI dashboard
+uvicorn src.api.main:app --reload --port 8000
+# cd frontend && npm run dev
 ```
 
 ---

@@ -11,7 +11,7 @@ HOW IT WORKS
 ============
 1. Load the original feature matrix (data/processed/features.parquet)
    with its original MIMIC-IV / synthetic labels.
-2. Load all clinician feedback from data/feedback/feedback.csv.
+2. Load all clinician feedback from logs/feedback.jsonl.
 3. For every patient that has been labelled by a clinician:
      - Override their original label with the clinician's label.
      - Assign a higher sample weight so the model pays extra attention

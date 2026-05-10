@@ -29,4 +29,12 @@ agent:
 
 app:
   title: "SepsisAlert — ICU Early Warning"
-  port: 8501
+
+feedback_agent:
+  min_records_to_act:    10    # minimum clinical feedback records before acting
+  min_narrative_to_act:   5    # minimum narrative ratings before acting
+  flag_rating_below:    2.5    # flag if mean narrative rating falls below this
+  flag_rating_std:      1.5    # flag if rating std exceeds this (clinician disagreement)
+  flag_fp_rate_above:   0.40   # flag if false positive rate exceeds this
+  retrain_min_confirmed:  5    # minimum confirmed-sepsis labels to trigger retrain
+  retrain_fp_rate_above: 0.30  # retrain if FP rate exceeds this (and min confirmed met)
