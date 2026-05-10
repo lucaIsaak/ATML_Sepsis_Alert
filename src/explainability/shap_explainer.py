@@ -100,8 +100,12 @@ def _extract_shap_vals(shap_values) -> tuple[np.ndarray, float]:
     return shap_values.values[0], float(shap_values.base_values[0])
 
 
-def build_explainer(model, x_background: pd.DataFrame) -> shap.TreeExplainer:
-    """Build a SHAP TreeExplainer for HistGradientBoosting (100× faster than Permutation)."""
+def build_explainer(model, x_background=None) -> shap.TreeExplainer:
+    """Build a SHAP TreeExplainer for HistGradientBoosting (100× faster than Permutation).
+
+    x_background is accepted for API compatibility but TreeExplainer does not
+    require a background dataset — it uses the model's own tree structure.
+    """
     return shap.TreeExplainer(model)
 
 
