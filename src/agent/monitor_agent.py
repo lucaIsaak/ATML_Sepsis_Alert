@@ -202,7 +202,7 @@ class PatientMonitorAgent:  # pylint: disable=too-many-instance-attributes
         """
         Run one monitoring cycle over all active patients.
 
-        Called periodically (e.g. every 15-60 minutes in production).
+        Called periodically (every 60 minutes in production).
         Returns new alerts generated this cycle.
         """
         if timestamp is None:
