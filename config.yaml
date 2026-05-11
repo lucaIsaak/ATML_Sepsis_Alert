@@ -25,7 +25,7 @@ narrative:
 
 agent:
   risk_threshold: 0.4           # trigger alert above this score
-  poll_interval_seconds: 60     # how often agent checks for new data (simulation)
+  poll_interval_seconds: 3600   # how often agent checks for new data (60 min)
 
 app:
   title: "SepsisAlert — ICU Early Warning"
