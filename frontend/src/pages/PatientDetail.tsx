@@ -218,7 +218,7 @@ export function PatientDetailPage() {
           value={patient.risk_label}
           description="HIGH ≥ 0.60 · MODERATE ≥ 0.40"
           valueClassName={
-            patient.risk_label === 'HIGH'
+            patient.risk_label === 'CRITICAL' || patient.risk_label === 'HIGH'
               ? 'text-destructive'
               : patient.risk_label === 'MODERATE'
               ? 'text-warning'
