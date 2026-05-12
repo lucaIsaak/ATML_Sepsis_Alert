@@ -254,9 +254,7 @@ def train_new_model(
         min_samples_leaf  = model_cfg["min_child_samples"],
         class_weight      = model_cfg["class_weight"],
         random_state      = 42,
-        early_stopping    = True,
-        validation_fraction = 0.1,
-        n_iter_no_change  = 50,
+        early_stopping    = False,   # matches train.py — max_iter is Optuna-tuned
         verbose           = 0,
     )
 

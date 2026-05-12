@@ -281,6 +281,9 @@ export function LiveMonitor() {
                         >
                           Age <SortArrow col="age" sortKey={sortKey} sortDir={sortDir} />
                         </th>
+                        <th className="px-4 py-3 text-center font-medium text-muted-foreground">
+                          Sex
+                        </th>
                         <th
                           className="px-4 py-3 text-right font-medium text-muted-foreground cursor-pointer hover:text-foreground select-none"
                           onClick={() => toggleSort('risk_score')}
@@ -311,6 +314,9 @@ export function LiveMonitor() {
                             {p.first_careunit}
                           </td>
                           <td className="px-4 py-2.5">{p.age ? Math.round(p.age) : '—'}</td>
+                          <td className="px-4 py-2.5 text-center text-xs text-muted-foreground">
+                            {p.gender ?? '—'}
+                          </td>
                           <td className="px-4 py-2.5 text-right font-mono font-semibold">
                             {p.risk_score.toFixed(3)}
                           </td>

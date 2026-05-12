@@ -58,6 +58,27 @@ export interface ModelStats {
   roc_news2: Array<{ fpr: number; tpr: number }>
 }
 
+export interface ModelInfo {
+  algorithm: string
+  auroc: number
+  auroc_ci_95: [number, number]
+  news2_auroc_testset: number
+  auprc_testset: number
+  brier_score: number
+  feature_count: number
+  sklearn_version: string
+  training_data: string
+  label_strategy: string
+  tuning: string
+  subgroup_auroc: {
+    male: number
+    female: number
+    age_young: number
+    age_middle: number
+    age_elderly: number
+  }
+}
+
 export interface DriftFeature {
   feature: string
   label: string

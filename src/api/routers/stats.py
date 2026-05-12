@@ -281,13 +281,24 @@ async def get_model_info(request: Request) -> dict:
     artifact = request.app.state.artifact
     model_type = type(artifact.get("model", None)).__name__ if artifact.get("model") else "Unknown"
     return {
-        "algorithm":       f"{model_type} (sklearn {sklearn.__version__})",
-        "auroc":           float(artifact.get("auroc", 0.8276)),
-        "feature_count":   len(artifact.get("feature_cols", [])),
-        "sklearn_version": sklearn.__version__,
-        "training_data":   "MIMIC-IV v3.1 — 93,224 ICU stays",
-        "label_strategy":  "Sepsis-3 ICD-10 proxy (A41.x / R65.2x)",
-        "tuning":          "Initial: Optuna Bayesian 50-trial search. Retrain: fixed hyperparams from config.",
+        "algorithm":           f"{model_type} (sklearn {sklearn.__version__})",
+        "auroc":               float(artifact.get("auroc", 0.8276)),
+        "auroc_ci_95":         [0.818, 0.836],
+        "news2_auroc_testset": 0.606,
+        "auprc_testset":       0.3531,
+        "brier_score":         0.0792,
+        "feature_count":       len(artifact.get("feature_cols", [])),
+        "sklearn_version":     sklearn.__version__,
+        "training_data":       "MIMIC-IV v3.1 — 93,224 ICU stays",
+        "label_strategy":      "Sepsis-3 ICD-10 proxy (A41.x / R65.2x)",
+        "tuning":              "Initial: Optuna Bayesian 50-trial search. Retrain: fixed hyperparams from config.",
+        "subgroup_auroc": {
+            "male":        0.8305,
+            "female":      0.8239,
+            "age_young":   0.8352,
+            "age_middle":  0.8277,
+            "age_elderly": 0.8177,
+        },
     }
 
 

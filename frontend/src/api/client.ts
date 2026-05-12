@@ -1,5 +1,5 @@
 import axios from 'axios'
-import type { Patient, PatientDetail, ClinicalFeedback, ModelStats, FeedbackAgentStatus, DriftStatus } from '@/types'
+import type { Patient, PatientDetail, ClinicalFeedback, ModelStats, ModelInfo, FeedbackAgentStatus, DriftStatus } from '@/types'
 
 const api = axios.create({
   baseURL: '/api',
@@ -65,6 +65,10 @@ export function getAuditLog(n = 20): Promise<Record<string, unknown>[]> {
 
 export function getModelStats(): Promise<ModelStats> {
   return api.get<ModelStats>('/stats').then((r) => r.data)
+}
+
+export function getModelInfo(): Promise<ModelInfo> {
+  return api.get<ModelInfo>('/model/info').then((r) => r.data)
 }
 
 export function getDriftStatus(): Promise<DriftStatus> {

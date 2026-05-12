@@ -15,10 +15,10 @@ import {
 } from 'recharts'
 import { useState, useEffect, useRef } from 'react'
 import { Loader2, RefreshCw, Play, ChevronDown, ChevronRight } from 'lucide-react'
-import { getModelStats, getFeedbackAgentStatus, triggerRetrain, getRetrainStatus, getDriftStatus, getAuditLog } from '@/api/client'
+import { getModelStats, getModelInfo, getFeedbackAgentStatus, triggerRetrain, getRetrainStatus, getDriftStatus, getAuditLog } from '@/api/client'
 import { MetricCard } from '@/components/MetricCard'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import type { FeedbackAgentStatus, DriftStatus } from '@/types'
+import type { FeedbackAgentStatus, DriftStatus, ModelInfo } from '@/types'
 
 // ------------------------------------------------------------------ //
 // Feedback Loop Agent status card                                      //
@@ -471,6 +471,12 @@ export function ModelPerformance() {
     queryFn: getModelStats,
   })
 
+  const { data: modelInfo } = useQuery({
+    queryKey: ['model-info'],
+    queryFn: getModelInfo,
+    staleTime: Infinity,
+  })
+
   const { data: drift } = useQuery({
     queryKey: ['drift-status'],
     queryFn: getDriftStatus,
@@ -538,24 +544,29 @@ export function ModelPerformance() {
         </p>
       </div>
 
-      {/* Top metrics — 4 cards */}
-      <div className="grid grid-cols-4 gap-4">
+      {/* Top metrics — 5 cards */}
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
         <MetricCard
           title="SepsisAlert AUROC"
-          value={stats.auroc.toFixed(3)}
-          description={`+${((stats.auroc - stats.news2_auroc) * 100).toFixed(1)}pp vs NEWS2`}
+          value={modelInfo ? `${modelInfo.auroc.toFixed(4)}` : stats.auroc.toFixed(3)}
+          description={modelInfo ? `95% CI ${modelInfo.auroc_ci_95[0]}–${modelInfo.auroc_ci_95[1]} · held-out test set` : `+${((stats.auroc - stats.news2_auroc) * 100).toFixed(1)}pp vs NEWS2`}
           valueClassName="text-primary"
         />
         <MetricCard
           title="NEWS2 AUROC"
-          value={stats.news2_auroc.toFixed(3)}
-          description="Clinical baseline"
+          value={modelInfo ? modelInfo.news2_auroc_testset.toFixed(3) : stats.news2_auroc.toFixed(3)}
+          description="Clinical baseline · held-out test set"
           valueClassName="text-muted-foreground"
         />
         <MetricCard
           title="AUPRC"
-          value={stats.auprc.toFixed(3)}
-          description="Average precision (imbalanced)"
+          value={modelInfo ? modelInfo.auprc_testset.toFixed(4) : stats.auprc.toFixed(3)}
+          description="Avg precision · 3.3× vs random"
+        />
+        <MetricCard
+          title="Brier Score"
+          value={modelInfo ? modelInfo.brier_score.toFixed(4) : '—'}
+          description="Calibration · lower is better"
         />
         {/* Drift status card */}
         {drift ? (() => {
@@ -664,6 +675,35 @@ export function ModelPerformance() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Fairness — subgroup AUROC */}
+      {modelInfo?.subgroup_auroc && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Subgroup AUROC — Fairness Evaluation</CardTitle>
+            <p className="text-xs text-muted-foreground">
+              Held-out test set (18,645 stays). All gaps &lt; 0.05 threshold. ✓
+              Race/ethnicity evaluation pending — required before clinical deployment.
+            </p>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+              {[
+                { label: 'Male',    value: modelInfo.subgroup_auroc.male },
+                { label: 'Female',  value: modelInfo.subgroup_auroc.female },
+                { label: 'Age 18–44 (young)',   value: modelInfo.subgroup_auroc.age_young },
+                { label: 'Age 45–74 (middle)',  value: modelInfo.subgroup_auroc.age_middle },
+                { label: 'Age 75+ (elderly)',   value: modelInfo.subgroup_auroc.age_elderly },
+              ].map(({ label, value }) => (
+                <div key={label} className="rounded-lg border bg-muted/20 p-3 text-center">
+                  <p className="text-xs text-muted-foreground mb-1">{label}</p>
+                  <p className="text-lg font-bold text-foreground">{value.toFixed(4)}</p>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Training cohort summary */}
       <div className="grid grid-cols-3 gap-4">

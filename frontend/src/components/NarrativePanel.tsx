@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Mic, MicOff, Send, Star, Loader2, Zap } from 'lucide-react'
+import { Mic, MicOff, Send, Star, Loader2, Zap, AlertCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { getModels, streamNarrative, saveNarrativeFeedback, transcribeAudio, getWhisperStatus } from '@/api/client'
@@ -123,16 +123,35 @@ export function NarrativePanel({ stayId, patientDetail }: NarrativePanelProps) {
     setIsRecording(false)
   }, [])
 
+  const ollamaUnavailable = models.length === 0
+
   return (
     <div className="space-y-4">
+      {/* Ollama unavailable banner */}
+      {ollamaUnavailable && (
+        <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 flex gap-3 items-start">
+          <AlertCircle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
+          <div className="text-sm text-amber-800 space-y-1">
+            <p className="font-medium">Ollama not running — narrative generation unavailable</p>
+            <p className="text-xs text-amber-700">
+              Install Ollama from <span className="font-mono">ollama.com</span>, then run{' '}
+              <span className="font-mono bg-amber-100 px-1 rounded">ollama serve</span> and pull a model with{' '}
+              <span className="font-mono bg-amber-100 px-1 rounded">ollama pull llama3.2</span>.
+              All other dashboard features work without it.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Model selector + generate */}
       <div className="flex gap-2 items-center">
         <select
-          className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
           value={currentModel}
           onChange={(e) => setSelectedModel(e.target.value)}
+          disabled={ollamaUnavailable}
         >
-          {models.length === 0 && (
+          {ollamaUnavailable && (
             <option value="">— Ollama not available —</option>
           )}
           {models.map((m) => (

@@ -142,12 +142,16 @@ function Sidebar() {
           )}
 
           {(criticalCount + highCount) > 0 && (
-            <div className="rounded-lg bg-destructive/10 border border-destructive/20 px-3 py-2 flex items-center gap-2">
+            <NavLink
+              to="/"
+              end
+              className="rounded-lg bg-destructive/10 border border-destructive/20 px-3 py-2 flex items-center gap-2 hover:bg-destructive/20 transition-colors"
+            >
               <AlertTriangle className="h-3.5 w-3.5 text-destructive flex-shrink-0" />
               <p className="text-xs text-destructive font-medium">
                 {criticalCount + highCount} patient{(criticalCount + highCount) > 1 ? 's' : ''} need attention
               </p>
-            </div>
+            </NavLink>
           )}
         </div>
 
