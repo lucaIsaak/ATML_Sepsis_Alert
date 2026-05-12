@@ -150,6 +150,8 @@ Subgroup AUROC computed by:
 
 Reported by `evaluate.py`. **Goal: AUROC gap across subgroups < 0.05.** If any subgroup gap exceeds 0.05, investigate feature distribution differences before deployment in that demographic.
 
+**Known fairness gap — race/ethnicity:** MIMIC-IV contains race/ethnicity data but race is not currently included as a subgroup in the fairness evaluation. Sepsis presentation, treatment delays, and outcomes differ by race in US tertiary-care cohorts (Prescott et al. 2020, JAMA Network Open). Race is not a model feature (intentional — model should not score differently based on race), but subgroup AUROC should be evaluated by race/ethnicity before deployment to detect any disparate performance. This is a pre-CE mark requirement and must be added to `evaluate.py` before the anchor-pilot validation study.
+
 ---
 
 ## Safety and Limitations
@@ -172,17 +174,22 @@ Every alert is written to an append-only JSONL audit log including: timestamp, r
 |---|---|---|
 | Alert fatigue (too many alerts) | Medium | 2h suppression window, tiered escalation, trend-based gating, near-miss rule |
 | False negative (missed sepsis) | Low at threshold 0.4 (sensitivity ~0.85+) | Near-miss rule catches sub-threshold patients deteriorating rapidly; clinician retains full assessment authority |
-| LLM hallucination | Low | NarrativeGuard (20+ prohibited patterns) blocks diagnosed-with / treatment-order language; SHAP fallback guaranteed |
+| LLM hallucination (prohibited patterns) | Low | NarrativeGuard (24 prohibited patterns) blocks diagnosed-with / treatment-order language; SHAP fallback guaranteed |
+| LLM value misrepresentation | Low-Medium | **Known gap:** NarrativeGuard validates feature name grounding but not value accuracy — LLM could describe a high-lactate driver as "lactate is low". Mitigation: clinicians are trained to verify against the SHAP panel; value-level grounding check is a pre-deployment improvement item |
 | Distribution shift (new hospital) | Medium | OOD detection flag; retraining recommended before deployment |
+| Stale data (vitals not updated) | Medium | **Known gap:** model scores on latest 24h window without checking data freshness. If vitals are >6h stale, score is unreliable. UI should display last-observation timestamp; scoring should be gated if data is stale. Pre-deployment improvement item |
+| CRITICAL alert not acknowledged | Medium | **Known gap:** no timeout or secondary escalation if physician does not acknowledge CRITICAL alert. Production deployment requires a timeout (e.g. 10 min) triggering charge nurse notification |
 | Label noise (discharge codes) | Medium | Accepted limitation; mitigated by large dataset (93k stays) |
-| Overreliance | Medium | UI displays "AI decision support — not a diagnosis" on every alert; CRITICAL tier requires physician acknowledgement |
+| Overreliance | Medium | UI displays "AI decision support — not a diagnosis" on every alert; CRITICAL tier requires physician acknowledgement; epistemic uncertainty CI shown for uncertain predictions |
+| Race/ethnicity subgroup performance | Medium | **Known gap:** subgroup AUROC not evaluated by race/ethnicity. Must be added before anchor-pilot validation study (see Fairness section) |
 | Voice note PII | Low | Audio transcribed locally by Whisper (no cloud call); transcribed text stored in `logs/narrative_feedback.jsonl` alongside stay_id — treat as protected health information under GDPR/HIPAA |
 | Sub-threshold deteriorating patients | Low | Near-miss rule: risk 0.30–0.39 + rapid deterioration triggers NURSE alert |
+| Cloud LLM misconfiguration | Low | config.yaml provider must be "ollama"; non-local providers blocked by GDPR hard gate (HTTP 403) in narrative router. Config validation at startup is a pre-deployment hardening item |
 
 ### Regulatory context
 - **EU MDR:** This system is classified as a **Class IIb** medical device under EU MDR 2017/745 (software intended to support clinical decisions with diagnosis/treatment impact in high-acuity settings — Rule 11). CE marking via a Notified Body is required before commercial deployment. Target: H2 2027.
 - **EU AI Act:** This system is a high-risk AI system under Annex III (medical device, clinical decision support). Technical documentation and audit logging are included per Art. 11 and Annex IV requirements.
-- **GDPR — Pseudonymization:** SepsisAlert never receives real patient identifiers. Hospitals pseudonymize patient IDs using HMAC-SHA256 (hospital-held key) before any data reaches the system. SepsisAlert operates as a **data processor** (Art. 28); the hospital is the data controller. A signed Data Processing Agreement is required per hospital before go-live. Health data (vitals, labs) remains special category data under Art. 9 even after pseudonymization — GDPR scope is not exited, but re-identification risk is eliminated on the SepsisAlert side. Voice correction notes transcribed by Whisper are stored locally and must be treated as protected health information.
+- **GDPR — Pseudonymization and quasi-identifier risk:** SepsisAlert never receives real patient identifiers. Hospitals pseudonymize patient IDs using HMAC-SHA256 (hospital-held key) before any data reaches the system. SepsisAlert operates as a **data processor** (Art. 28); the hospital is the data controller. A signed Data Processing Agreement is required per hospital before go-live. Health data (vitals, labs) remains special category data under Art. 9 even after pseudonymization — GDPR scope is not exited, but re-identification risk is reduced on the SepsisAlert side. **Important limitation:** age, care unit, and admission timing together constitute quasi-identifiers that may uniquely identify a patient within a small ICU unit even without a direct identifier. This risk is formally assessed in the Data Protection Impact Assessment (DPIA) required under Art. 35 before the first hospital Data Processing Agreement is signed. The re-identification risk model and mitigating controls are documented in the Technical File for MDR conformity. Voice correction notes transcribed by Whisper are stored locally and must be treated as protected health information.
 - **GDPR — Data minimization (Art. 5(1)(c)):** Only the minimum data required for clinical inference is processed: vitals, labs, age, gender, and hashed stay ID. No names, dates of birth, addresses, or insurance identifiers are collected at any point.
 - **GDPR — Right to erasure (Art. 17):** Deletion requests reference the hashed ID. SepsisAlert purges all matching audit log, feedback, and training label records. The hospital destroys the hash-to-real-ID mapping.
 - **HIPAA:** Intended for on-premise deployment. The Ollama narrative backend ensures no PHI leaves the hospital network. Any cloud-based LLM integration must operate under a signed HIPAA Business Associate Agreement (BAA).

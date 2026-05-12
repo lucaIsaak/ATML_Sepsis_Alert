@@ -25,7 +25,11 @@ model:
   class_weight: "balanced"  # Without balancing, model achieves 78% accuracy by predicting "no sepsis" for all patients
 
 narrative:
-  provider: "ollama"            # "ollama" (on-premise, GDPR-compliant) | "claude" | "huggingface"
+  provider: "ollama"            # MUST be "ollama" for GDPR compliance — patient feature data is included
+                                # in the LLM prompt and must never leave the hospital network.
+                                # "claude" / "huggingface" options are listed for future BAA-covered
+                                # deployments only; non-ollama providers are hard-blocked by a 403
+                                # gate in src/api/routers/narrative.py until config validation is added.
   ollama_model: "mistral:7b"    # On-premise model — no patient data leaves the hospital network
   ollama_base_url: "http://localhost:11434"
   max_tokens: 300               # Enforces the 5-sentence brevity rule — longer outputs increase alert fatigue
@@ -45,3 +49,22 @@ feedback_agent:
   flag_fp_rate_above:   0.40   # Flag if >40% of alerts are marked wrong — acceptable FP rate at threshold 0.40
   retrain_min_confirmed:  5    # Minimum confirmed-sepsis labels before retraining — ensures signal quality
   retrain_fp_rate_above: 0.30  # Retrain if FP rate exceeds 30% — balances alert fatigue vs. missed cases
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MDR retraining bounds (EU MDR Art. 120 / MDCG 2020-1 guidance)
+# ─────────────────────────────────────────────────────────────────────────────
+# These thresholds define what constitutes a "non-significant change" to the
+# model under EU MDR. Retraining that keeps all metrics within these bounds
+# does NOT trigger a new conformity assessment (Notified Body re-certification).
+# Retraining that breaches any bound must be treated as a significant change
+# and submitted as a design change under the QMS before deployment.
+#
+# Bounds are locked at CE mark submission and must not be changed without
+# a formal change control procedure.
+retraining_bounds:
+  auroc_min:       0.87    # Must stay above 0.87 (current: 0.895 — 0.025 headroom)
+  auroc_max_drop:  0.025   # AUROC may not drop more than 0.025 from baseline in a single retrain cycle
+  sensitivity_min: 0.80    # At threshold 0.40 — below this, patient safety risk increases materially
+  specificity_min: 0.60    # At threshold 0.40 — below this, alert fatigue risk increases materially
+  brier_max:       0.15    # Calibration upper bound — above this, displayed risk scores are misleading
+  feature_set_locked: true # Adding or removing features is always a significant change requiring re-certification

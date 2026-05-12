@@ -100,6 +100,18 @@ async def lifespan(app: FastAPI):
     """Load model, data and predictions at startup; start background monitor."""
     cfg = load_config()
 
+    # GDPR hard gate — validate at startup, not at first request.
+    # Prevents a misconfigured provider from constructing a patient-data-laden
+    # prompt and failing only after the SHAP summary has been assembled.
+    _provider = cfg.get("narrative", {}).get("provider", "ollama")
+    if _provider != "ollama":
+        raise RuntimeError(
+            f"\n\n  [SepsisAlert] narrative.provider is set to '{_provider}'.\n"
+            "  Only 'ollama' is permitted — patient feature data is included in\n"
+            "  the LLM prompt and must never leave the hospital network (GDPR Art. 9).\n"
+            "  Set narrative.provider: 'ollama' in config.yaml.\n"
+        )
+
     # Load model artifact (relative paths now safe — os.chdir(ROOT) at module level)
     artifact = joblib.load(cfg["model"]["artifact_path"])
 

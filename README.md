@@ -195,6 +195,8 @@ SepsisAlert side (data processor):
 
 Health data (vitals, labs) is GDPR **special category data** under Art. 9 even without a name attached — a combination of vitals, age, and ICU admission time can re-identify a patient in a small unit. Pseudonymization does not exit GDPR scope; it reduces re-identification risk while keeping SepsisAlert unable to identify anyone without the hospital's key.
 
+**Quasi-identifier risk and DPIA requirement:** Age, care unit, and admission timing together constitute quasi-identifiers that may uniquely identify a patient within a small ICU even without a direct identifier. This risk cannot be fully mitigated by HMAC pseudonymization alone. A formal **Data Protection Impact Assessment (DPIA) under Art. 35** is required — and will be completed — before the first hospital Data Processing Agreement is signed. The DPIA documents the re-identification risk model, residual risk, and technical mitigations, and forms part of the Technical File for EU MDR conformity assessment.
+
 ### Roles and responsibilities
 
 | Party | GDPR role | Obligations |
