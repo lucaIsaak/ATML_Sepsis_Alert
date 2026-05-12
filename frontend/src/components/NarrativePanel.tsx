@@ -1,6 +1,6 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Mic, MicOff, Send, Star, Loader2, Zap } from 'lucide-react'
+import { Mic, MicOff, Send, Star, Loader2, Zap, AlertCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { getModels, streamNarrative, saveNarrativeFeedback, transcribeAudio, getWhisperStatus } from '@/api/client'
@@ -20,10 +20,24 @@ export function NarrativePanel({ stayId, patientDetail }: NarrativePanelProps) {
   const [isRecording, setIsRecording] = useState(false)
   const [isTranscribing, setIsTranscribing] = useState(false)
   const [feedbackSaved, setFeedbackSaved] = useState(false)
+  const [recordingSeconds, setRecordingSeconds] = useState(0)
 
   const abortRef = useRef<AbortController | null>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
+  const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // Recording duration counter
+  useEffect(() => {
+    if (isRecording) {
+      setRecordingSeconds(0)
+      recordingTimerRef.current = setInterval(() => setRecordingSeconds((s) => s + 1), 1000)
+    } else {
+      if (recordingTimerRef.current) clearInterval(recordingTimerRef.current)
+      setRecordingSeconds(0)
+    }
+    return () => { if (recordingTimerRef.current) clearInterval(recordingTimerRef.current) }
+  }, [isRecording])
 
   const { data: models = [] } = useQuery({
     queryKey: ['models'],
@@ -109,16 +123,35 @@ export function NarrativePanel({ stayId, patientDetail }: NarrativePanelProps) {
     setIsRecording(false)
   }, [])
 
+  const ollamaUnavailable = models.length === 0
+
   return (
     <div className="space-y-4">
+      {/* Ollama unavailable banner */}
+      {ollamaUnavailable && (
+        <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 flex gap-3 items-start">
+          <AlertCircle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
+          <div className="text-sm text-amber-800 space-y-1">
+            <p className="font-medium">Ollama not running — narrative generation unavailable</p>
+            <p className="text-xs text-amber-700">
+              Install Ollama from <span className="font-mono">ollama.com</span>, then run{' '}
+              <span className="font-mono bg-amber-100 px-1 rounded">ollama serve</span> and pull a model with{' '}
+              <span className="font-mono bg-amber-100 px-1 rounded">ollama pull mistral:7b</span>.
+              All other dashboard features work without it.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Model selector + generate */}
       <div className="flex gap-2 items-center">
         <select
-          className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
           value={currentModel}
           onChange={(e) => setSelectedModel(e.target.value)}
+          disabled={ollamaUnavailable}
         >
-          {models.length === 0 && (
+          {ollamaUnavailable && (
             <option value="">— Ollama not available —</option>
           )}
           {models.map((m) => (
@@ -204,7 +237,16 @@ export function NarrativePanel({ stayId, patientDetail }: NarrativePanelProps) {
             </div>
 
             {isRecording && (
-              <p className="text-xs text-destructive animate-pulse">Recording… click mic to stop</p>
+              <div className="flex items-center gap-2">
+                <span className="inline-block h-2 w-2 rounded-full bg-destructive animate-pulse" />
+                <p className="text-xs text-destructive font-mono">
+                  {String(Math.floor(recordingSeconds / 60)).padStart(2, '0')}:{String(recordingSeconds % 60).padStart(2, '0')}
+                  {' '}— click mic to stop
+                  {recordingSeconds >= 50 && (
+                    <span className="ml-2 font-semibold"> (max 60 s)</span>
+                  )}
+                </p>
+              </div>
             )}
 
             <Button

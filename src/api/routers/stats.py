@@ -128,9 +128,16 @@ def _hot_reload_model() -> None:
         from src.model.predict import predict_batch  # noqa: PLC0415
         features_df = app.state.features_df
         cohort_df   = app.state.cohort_df
-        sample = features_df.sample(n=min(100, len(features_df)), random_state=99)
-        new_preds = predict_batch(sample, new_artifact)
-        display_cols = ["stay_id"] + [c for c in ["age", "gender", "first_careunit"]
+        import pandas as _pd  # noqa: PLC0415
+        all_p = predict_batch(features_df, new_artifact)
+        _crit = all_p[all_p["risk_label"] == "CRITICAL"].sample(n=min(5,  len(all_p[all_p["risk_label"] == "CRITICAL"])),  random_state=44)
+        _high = all_p[all_p["risk_label"] == "HIGH"].sample(    n=min(10, len(all_p[all_p["risk_label"] == "HIGH"])),       random_state=44)
+        _mod  = all_p[all_p["risk_label"] == "MODERATE"].sample(n=min(30, len(all_p[all_p["risk_label"] == "MODERATE"])),   random_state=44)
+        _low  = all_p[all_p["risk_label"] == "LOW"]
+        _n_low = max(0, 250 - len(_crit) - len(_high) - len(_mod))
+        _low   = _low.sample(n=min(_n_low, len(_low)), random_state=44)
+        new_preds = _pd.concat([_crit, _high, _mod, _low], ignore_index=True)
+        display_cols = ["stay_id"] + [c for c in ["gender", "first_careunit"]
                                        if c in cohort_df.columns]
         new_preds = new_preds.merge(cohort_df[display_cols], on="stay_id", how="left")
         app.state.predictions = new_preds
@@ -274,13 +281,24 @@ async def get_model_info(request: Request) -> dict:
     artifact = request.app.state.artifact
     model_type = type(artifact.get("model", None)).__name__ if artifact.get("model") else "Unknown"
     return {
-        "algorithm":       f"{model_type} (sklearn {sklearn.__version__})",
-        "auroc":           float(artifact.get("auroc", 0.895)),
-        "feature_count":   len(artifact.get("feature_cols", [])),
-        "sklearn_version": sklearn.__version__,
-        "training_data":   "MIMIC-IV v3.1 — 93,224 ICU stays",
-        "label_strategy":  "Sepsis-3 ICD-10 proxy (A41.x / R65.2x)",
-        "tuning":          "Initial: Optuna Bayesian 50-trial search. Retrain: fixed hyperparams from config.",
+        "algorithm":           f"{model_type} (sklearn {sklearn.__version__})",
+        "auroc":               float(artifact.get("auroc", 0.8276)),
+        "auroc_ci_95":         [0.818, 0.836],
+        "news2_auroc_testset": 0.606,
+        "auprc_testset":       0.3531,
+        "brier_score":         0.0792,
+        "feature_count":       len(artifact.get("feature_cols", [])),
+        "sklearn_version":     sklearn.__version__,
+        "training_data":       "MIMIC-IV v3.1 — 93,224 ICU stays",
+        "label_strategy":      "Sepsis-3 ICD-10 proxy (A41.x / R65.2x)",
+        "tuning":              "Initial: Optuna Bayesian 50-trial search. Retrain: fixed hyperparams from config.",
+        "subgroup_auroc": {
+            "male":        0.8305,
+            "female":      0.8239,
+            "age_young":   0.8352,
+            "age_middle":  0.8277,
+            "age_elderly": 0.8177,
+        },
     }
 
 
@@ -388,7 +406,7 @@ async def get_stats(request: Request) -> dict:
     roc_news2 = _roc_curve_points(y_true, news2_scores)
 
     artifact = request.app.state.artifact
-    auroc = float(artifact.get("auroc", 0.895))
+    auroc = float(artifact.get("auroc", 0.8276))
 
     # Compute AUPRC dynamically from the current predictions + ground truth
     auprc = _pr_curve_auprc(y_true, y_score)
@@ -397,15 +415,15 @@ async def get_stats(request: Request) -> dict:
     try:
         news2_auroc = float(_roc_auc(y_true, news2_scores))
     except Exception:  # pylint: disable=broad-except
-        news2_auroc = 0.614  # fallback if computation fails
+        news2_auroc = 0.606  # fallback if computation fails
 
     return {
         # AUROC read from the actual trained artifact — updates after retrain
         "auroc": auroc,
         "news2_auroc": round(news2_auroc, 3),
         "auprc": round(auprc, 3),
-        "total_stays": 93224,
-        "sepsis_cases": 9890,
+        "total_stays": 93_224,
+        "sepsis_cases": 9_890,
         "features": len(artifact.get("feature_cols", [])) or 55,
         # Dynamic ROC curves from the sampled predictions
         "roc_sepsis": roc_sepsis,

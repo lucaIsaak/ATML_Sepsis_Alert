@@ -12,7 +12,7 @@ Generates:
 - Subgroup AUROC by gender and age quartile (fairness)
 
 Bootstrap CI rationale (Efron & Tibshirani 1993):
-  A point estimate alone (AUROC 0.895) gives no indication of stability.
+  A point estimate alone (AUROC 0.8276) gives no indication of stability.
   Bootstrap resampling with replacement quantifies how much the estimate
   would vary across different draws from the same population — the standard
   approach for small-to-medium medical AI test sets (Sun & Xu 2014,
@@ -23,7 +23,8 @@ Bootstrap CI rationale (Efron & Tibshirani 1993):
 Clinical context:
   Johnson et al. 2023 (MIMIC-IV ICD-10 proxy): AUROC 0.87 [0.85, 0.89]
   Moor et al. 2021 (MIMIC-III early warning): AUROC 0.85–0.89
-  Royal College of Physicians NEWS2 AUROC: 0.614 (our test set)
+  SepsisAlert real MIMIC-IV AUROC: 0.8276 (95% CI 0.818–0.836)
+  Royal College of Physicians NEWS2 AUROC: 0.606 (our test set)
 
 EU AI Act Art. 9 (risk management) requires quantified performance bounds,
 not just point estimates, for high-risk AI systems.
@@ -59,7 +60,7 @@ def bootstrap_auroc_ci(
     Estimate a two-sided bootstrap CI for AUROC.
 
     Uses stratified resampling (preserves class ratio in each bootstrap
-    draw) so the CI is valid even with the ~22% sepsis prevalence in
+    draw) so the CI is valid even with the 10.6% sepsis prevalence in
     the MIMIC-IV test set.  Returns (lower, upper) bounds.
 
     Reference: Efron & Tibshirani (1993) "An Introduction to the

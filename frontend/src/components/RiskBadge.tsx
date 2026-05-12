@@ -8,7 +8,7 @@ interface RiskBadgeProps {
 
 export function RiskBadge({ label, className }: RiskBadgeProps) {
   const variant =
-    label === 'HIGH' ? 'destructive' : label === 'MODERATE' ? 'warning' : 'secondary'
+    label === 'CRITICAL' || label === 'HIGH' ? 'destructive' : label === 'MODERATE' ? 'warning' : 'secondary'
   return (
     <Badge variant={variant} className={className}>
       {label}

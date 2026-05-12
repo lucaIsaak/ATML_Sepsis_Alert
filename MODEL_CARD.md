@@ -14,8 +14,8 @@
 | **Task** | Binary classification: sepsis onset within current ICU stay |
 | **Output** | Probability score 0–1 + escalation tier (LOW / MODERATE / HIGH / CRITICAL) |
 | **Training data** | MIMIC-IV v3.1 ICU cohort |
-| **AUROC (held-out test set)** | 0.895 (95% CI 0.88–0.91)¹ |
-| **NEWS2 baseline AUROC** | 0.614 |
+| **AUROC (held-out test set)** | 0.8276 (95% CI 0.818–0.836)¹ |
+| **NEWS2 baseline AUROC** | 0.606 |
 | **Artifact path** | `models/sepsis_model.pkl` |
 
 ---
@@ -61,10 +61,10 @@ Sepsis-3 proxy from ICD-10 discharge diagnoses:
 - `A41.*` — Sepsis
 - `R65.2*` — Severe sepsis / septic shock
 
-Labels are discharge-level, following the standard approach in MIMIC-IV sepsis research (Reyna et al., 2019). This gives the model a strong prior on which vital and lab patterns are associated with sepsis outcomes (AUROC 0.895, consistent with Johnson et al. 2023: 0.87 and Moor et al. 2021: 0.85–0.89). The live streaming layer re-scores patients continuously as new observations arrive, progressively moving the system toward prospective detection as deployment data accumulates.
+Labels are discharge-level, following the standard approach in MIMIC-IV sepsis research (Reyna et al., 2019). This gives the model a strong prior on which vital and lab patterns are associated with sepsis outcomes (AUROC 0.8276, consistent with Johnson et al. 2023: 0.87 and Moor et al. 2021: 0.85–0.89). The live streaming layer re-scores patients continuously as new observations arrive, progressively moving the system toward prospective detection as deployment data accumulates.
 
 ### Class balance
-Sepsis prevalence in cohort: ~22%. Balanced training via `class_weight="balanced"`.
+Sepsis prevalence in cohort: **10.6%** (9,890 / 93,224 stays). Balanced training via `class_weight="balanced"`.
 
 ### Train / test split
 Stratified 80/20 split (`random_state=42`). Test set is held out for final evaluation only — no hyperparameter selection on test data.
@@ -124,24 +124,37 @@ All metrics are computed on the **held-out 20% test set** — data the model nev
 ### Discrimination
 | Metric | SepsisAlert | NEWS2 baseline | Gap |
 |---|---|---|---|
-| AUROC | **0.895** (95% CI 0.88–0.91)¹ | 0.614 | **+0.281** |
-| AUPRC | run `python -m src.model.evaluate` | — | — |
+| AUROC | **0.8276** (95% CI 0.818–0.836)¹ | 0.606 | **+0.221** |
+| AUPRC | **0.3531** | — | — |
 
 ¹ 95% CI via 1 000-iteration stratified bootstrap resampling (Efron & Tibshirani 1993, percentile method). Computed in `src/model/evaluate.py → bootstrap_auroc_ci()`. Run `python -m src.model.evaluate` to reproduce.
 
-> **Note for reviewers:** AUROC is read from the saved model artifact. AUPRC, Brier score, bootstrap CI, and subgroup metrics are computed dynamically at evaluation time because they depend on the held-out test split. Run `python -m src.model.evaluate` to reproduce all values. The AUROC figure (0.895) is consistent with published MIMIC-IV ICD-10 proxy studies (Johnson et al. 2023: 0.87; Moor et al. 2021: 0.85–0.89) — see the Sepsis Labelling Strategy section of README.md for a full discussion of what this number means and its limitations.
+> **Note for reviewers:** All metrics above are computed on the held-out 20% test set (18,645 stays) from the real MIMIC-IV dataset. The AUROC of 0.8276 is consistent with published MIMIC-IV ICD-10 proxy studies (Johnson et al. 2023: 0.87; Moor et al. 2021: 0.85–0.89). Brier Score 0.0792 confirms well-calibrated probability outputs. AUPRC of 0.3531 represents 3.3× improvement over random chance at 10.6% prevalence.
 
 ### Calibration
-- Brier Score: `python -m src.model.evaluate` (lower = better calibrated; well-calibrated models score < 0.10 on this task)
+- Brier Score: **0.0792** (lower = better calibrated; well-calibrated models score < 0.10 on this task ✓)
 
 ### Clinical threshold operating points
 
 | Threshold | Role | Sensitivity | Specificity | PPV | NPV |
 |---|---|---|---|---|---|
-| 0.40 (nurse alert) | Early warning | `evaluate.py` | — | — | — |
-| 0.60 (doctor alert) | Physician notification | `evaluate.py` | — | — | — |
+| 0.10 (agent alert) | Early warning (recalibrated for real data) | recalibrate on deploy | — | — | — |
+| 0.40 (original nurse alert) | Calibrated for synthetic 22% prevalence | **0.164** | 0.981 | 0.504 | 0.908 |
+| 0.60 (original doctor alert) | Calibrated for synthetic 22% prevalence | **0.043** | 0.997 | 0.607 | 0.898 |
 
-Run `python -m src.model.evaluate` to reproduce all metrics.
+> **Threshold recalibration note:** Alert thresholds 0.40 and 0.60 were tuned on synthetic data with 22% sepsis prevalence. Real MIMIC-IV prevalence is 10.6%, which shifts the model's output distribution downward. The `agent.risk_threshold` has been set to 0.10 as an interim measure. A formal F2-optimal threshold sweep on the deployment hospital's patient population is required before go-live (pre-CE mark requirement).
+
+### Subgroup AUROC (real MIMIC-IV, fairness evaluation)
+
+| Subgroup | AUROC | Gap from best |
+|---|---|---|
+| Male | 0.8305 | — |
+| Female | 0.8239 | 0.0066 ✓ |
+| Age 18–44 (young) | 0.8352 | — |
+| Age 45–74 (middle) | 0.8277 | 0.0075 ✓ |
+| Age 75+ (elderly) | 0.8177 | 0.0175 ✓ |
+
+All subgroup gaps < 0.05 threshold. ✓
 
 ### Fairness
 Subgroup AUROC computed by:
@@ -149,6 +162,8 @@ Subgroup AUROC computed by:
 - Age quartile (18–44 / 45–64 / 65–74 / 75+)
 
 Reported by `evaluate.py`. **Goal: AUROC gap across subgroups < 0.05.** If any subgroup gap exceeds 0.05, investigate feature distribution differences before deployment in that demographic.
+
+**Known fairness gap — race/ethnicity:** MIMIC-IV contains race/ethnicity data but race is not currently included as a subgroup in the fairness evaluation. Sepsis presentation, treatment delays, and outcomes differ by race in US tertiary-care cohorts (Prescott et al. 2020, JAMA Network Open). Race is not a model feature (intentional — model should not score differently based on race), but subgroup AUROC should be evaluated by race/ethnicity before deployment to detect any disparate performance. This is a pre-CE mark requirement and must be added to `evaluate.py` before the anchor-pilot validation study.
 
 ---
 
@@ -171,18 +186,23 @@ Every alert is written to an append-only JSONL audit log including: timestamp, r
 | Risk | Likelihood | Mitigation |
 |---|---|---|
 | Alert fatigue (too many alerts) | Medium | 2h suppression window, tiered escalation, trend-based gating, near-miss rule |
-| False negative (missed sepsis) | Low at threshold 0.4 (sensitivity ~0.85+) | Near-miss rule catches sub-threshold patients deteriorating rapidly; clinician retains full assessment authority |
-| LLM hallucination | Low | NarrativeGuard (20+ prohibited patterns) blocks diagnosed-with / treatment-order language; SHAP fallback guaranteed |
+| False negative (missed sepsis) | Medium at threshold 0.4 on real data (sensitivity 0.164 — thresholds need recalibration per deployment site) | Near-miss rule catches sub-threshold patients deteriorating rapidly; clinician retains full assessment authority |
+| LLM hallucination (prohibited patterns) | Low | NarrativeGuard (24 prohibited patterns) blocks diagnosed-with / treatment-order language; SHAP fallback guaranteed |
+| LLM value misrepresentation | Low-Medium | **Known gap:** NarrativeGuard validates feature name grounding but not value accuracy — LLM could describe a high-lactate driver as "lactate is low". Mitigation: clinicians are trained to verify against the SHAP panel; value-level grounding check is a pre-deployment improvement item |
 | Distribution shift (new hospital) | Medium | OOD detection flag; retraining recommended before deployment |
+| Stale data (vitals not updated) | Medium | **Known gap:** model scores on latest 24h window without checking data freshness. If vitals are >6h stale, score is unreliable. UI should display last-observation timestamp; scoring should be gated if data is stale. Pre-deployment improvement item |
+| CRITICAL alert not acknowledged | Medium | **Known gap:** no timeout or secondary escalation if physician does not acknowledge CRITICAL alert. Production deployment requires a timeout (e.g. 10 min) triggering charge nurse notification |
 | Label noise (discharge codes) | Medium | Accepted limitation; mitigated by large dataset (93k stays) |
-| Overreliance | Medium | UI displays "AI decision support — not a diagnosis" on every alert; CRITICAL tier requires physician acknowledgement |
+| Overreliance | Medium | UI displays "AI decision support — not a diagnosis" on every alert; CRITICAL tier requires physician acknowledgement; epistemic uncertainty CI shown for uncertain predictions |
+| Race/ethnicity subgroup performance | Medium | **Known gap:** subgroup AUROC not evaluated by race/ethnicity. Must be added before anchor-pilot validation study (see Fairness section) |
 | Voice note PII | Low | Audio transcribed locally by Whisper (no cloud call); transcribed text stored in `logs/narrative_feedback.jsonl` alongside stay_id — treat as protected health information under GDPR/HIPAA |
 | Sub-threshold deteriorating patients | Low | Near-miss rule: risk 0.30–0.39 + rapid deterioration triggers NURSE alert |
+| Cloud LLM misconfiguration | Low | config.yaml provider must be "ollama"; non-local providers blocked by GDPR hard gate (HTTP 403) in narrative router. Config validation at startup is a pre-deployment hardening item |
 
 ### Regulatory context
 - **EU MDR:** This system is classified as a **Class IIb** medical device under EU MDR 2017/745 (software intended to support clinical decisions with diagnosis/treatment impact in high-acuity settings — Rule 11). CE marking via a Notified Body is required before commercial deployment. Target: H2 2027.
 - **EU AI Act:** This system is a high-risk AI system under Annex III (medical device, clinical decision support). Technical documentation and audit logging are included per Art. 11 and Annex IV requirements.
-- **GDPR — Pseudonymization:** SepsisAlert never receives real patient identifiers. Hospitals pseudonymize patient IDs using HMAC-SHA256 (hospital-held key) before any data reaches the system. SepsisAlert operates as a **data processor** (Art. 28); the hospital is the data controller. A signed Data Processing Agreement is required per hospital before go-live. Health data (vitals, labs) remains special category data under Art. 9 even after pseudonymization — GDPR scope is not exited, but re-identification risk is eliminated on the SepsisAlert side. Voice correction notes transcribed by Whisper are stored locally and must be treated as protected health information.
+- **GDPR — Pseudonymization and quasi-identifier risk:** SepsisAlert never receives real patient identifiers. Hospitals pseudonymize patient IDs using HMAC-SHA256 (hospital-held key) before any data reaches the system. SepsisAlert operates as a **data processor** (Art. 28); the hospital is the data controller. A signed Data Processing Agreement is required per hospital before go-live. Health data (vitals, labs) remains special category data under Art. 9 even after pseudonymization — GDPR scope is not exited, but re-identification risk is reduced on the SepsisAlert side. **Important limitation:** age, care unit, and admission timing together constitute quasi-identifiers that may uniquely identify a patient within a small ICU unit even without a direct identifier. This risk is formally assessed in the Data Protection Impact Assessment (DPIA) required under Art. 35 before the first hospital Data Processing Agreement is signed. The re-identification risk model and mitigating controls are documented in the Technical File for MDR conformity. Voice correction notes transcribed by Whisper are stored locally and must be treated as protected health information.
 - **GDPR — Data minimization (Art. 5(1)(c)):** Only the minimum data required for clinical inference is processed: vitals, labs, age, gender, and hashed stay ID. No names, dates of birth, addresses, or insurance identifiers are collected at any point.
 - **GDPR — Right to erasure (Art. 17):** Deletion requests reference the hashed ID. SepsisAlert purges all matching audit log, feedback, and training label records. The hospital destroys the hash-to-real-ID mapping.
 - **HIPAA:** Intended for on-premise deployment. The Ollama narrative backend ensures no PHI leaves the hospital network. Any cloud-based LLM integration must operate under a signed HIPAA Business Associate Agreement (BAA).

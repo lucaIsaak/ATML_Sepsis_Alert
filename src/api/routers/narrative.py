@@ -7,6 +7,7 @@ POST /narrative/stream  — stream a clinical narrative for a patient
 
 from __future__ import annotations
 
+import asyncio
 import re
 import requests
 from fastapi import APIRouter, HTTPException, Request
@@ -44,7 +45,11 @@ async def list_models(request: Request) -> list[str]:
     cfg = request.app.state.cfg
     base_url = cfg["narrative"]["ollama_base_url"]
     try:
-        resp = requests.get(f"{base_url}/api/tags", timeout=5)
+        # Run blocking requests.get in thread pool — keeps the event loop free
+        loop = asyncio.get_running_loop()
+        resp = await loop.run_in_executor(
+            None, lambda: requests.get(f"{base_url}/api/tags", timeout=5)
+        )
         resp.raise_for_status()
         models = resp.json().get("models", [])
         return [m["name"] for m in models]

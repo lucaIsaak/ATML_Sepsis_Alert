@@ -42,11 +42,36 @@ def load_config(path: str = "config.yaml") -> dict:
 
 
 def _build_predictions(features_df: pd.DataFrame, artifact: dict, cohort_df: pd.DataFrame) -> pd.DataFrame:
-    """Sample patients, run predictions, merge display columns."""
+    """Sample patients, run predictions, merge display columns.
+
+    Scoring strategy: score all patients first, then build a display cohort of
+    250 that guarantees high-risk patients are visible.  All HIGH/CRITICAL patients
+    are kept (usually <1% of the dataset); remaining slots are filled from
+    MODERATE and LOW to reach 250 total.
+    """
     from src.model.predict import predict_batch  # noqa: PLC0415
-    sampled = features_df.sample(n=min(100, len(features_df)), random_state=99)
-    preds = predict_batch(sampled, artifact)
-    display_cols = ["stay_id"] + [c for c in ["age", "gender", "first_careunit"]
+    import pandas as pd  # noqa: PLC0415
+
+    all_preds = predict_batch(features_df, artifact)
+
+    # Stratified display cohort: include all risk tiers so the dashboard
+    # always shows a clinically representative spread.
+    # Caps: CRITICAL all (rare), HIGH up to 10, MODERATE up to 30, LOW fills to 250.
+    crit     = all_preds[all_preds["risk_label"] == "CRITICAL"]
+    high     = all_preds[all_preds["risk_label"] == "HIGH"]
+    moderate = all_preds[all_preds["risk_label"] == "MODERATE"]
+    low      = all_preds[all_preds["risk_label"] == "LOW"]
+
+    parts = [crit.sample(n=min(5, len(crit)), random_state=44)]
+    parts.append(high.sample(n=min(10, len(high)), random_state=44))
+    parts.append(moderate.sample(n=min(30, len(moderate)), random_state=44))
+    n_low = max(0, 250 - sum(len(p) for p in parts))
+    parts.append(low.sample(n=min(n_low, len(low)), random_state=44))
+    preds = pd.concat(parts, ignore_index=True)
+
+    # age is already in preds (from features.parquet); only pull gender/first_careunit from cohort
+    # to avoid pandas renaming age → age_x / age_y on merge
+    display_cols = ["stay_id"] + [c for c in ["gender", "first_careunit"]
                                    if c in cohort_df.columns]
     return preds.merge(cohort_df[display_cols], on="stay_id", how="left")
 
@@ -99,6 +124,18 @@ async def _periodic_monitoring(
 async def lifespan(app: FastAPI):
     """Load model, data and predictions at startup; start background monitor."""
     cfg = load_config()
+
+    # GDPR hard gate — validate at startup, not at first request.
+    # Prevents a misconfigured provider from constructing a patient-data-laden
+    # prompt and failing only after the SHAP summary has been assembled.
+    _provider = cfg.get("narrative", {}).get("provider", "ollama")
+    if _provider != "ollama":
+        raise RuntimeError(
+            f"\n\n  [SepsisAlert] narrative.provider is set to '{_provider}'.\n"
+            "  Only 'ollama' is permitted — patient feature data is included in\n"
+            "  the LLM prompt and must never leave the hospital network (GDPR Art. 9).\n"
+            "  Set narrative.provider: 'ollama' in config.yaml.\n"
+        )
 
     # Load model artifact (relative paths now safe — os.chdir(ROOT) at module level)
     artifact = joblib.load(cfg["model"]["artifact_path"])

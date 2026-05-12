@@ -124,8 +124,6 @@ def _detect_suffix(audio_file) -> str:
 
 
 # Cache the model at module level so it isn't reloaded on every call.
-# Streamlit's @st.cache_resource cannot be used here (circular import),
-# so we use a simple module-level dict instead.
 _model_cache: dict[str, object] = {}
 
 

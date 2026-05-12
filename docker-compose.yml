@@ -1,0 +1,45 @@
+# SepsisAlert — docker-compose
+#
+# Quick start:
+#   docker-compose up --build
+#   Open http://localhost (React dashboard)
+#   API docs: http://localhost:8000/docs
+#
+# Narratives require Ollama running on the host:
+#   ollama pull mistral:7b && ollama serve
+#   Set OLLAMA_BASE_URL=http://host.docker.internal:11434 in .env
+
+services:
+
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      # Persist generated data, trained model, and audit logs across restarts
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./logs:/app/logs
+    environment:
+      # Allow requests from the nginx frontend container
+      - CORS_ORIGINS=http://localhost,http://127.0.0.1
+      # Point to host Ollama if running outside Docker
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 120s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped

@@ -70,7 +70,7 @@ class OllamaClient:
         Stream a chat response from Ollama, yielding text chunks as they arrive.
 
         Uses Ollama's streaming API (stream=True) so the caller receives tokens
-        incrementally — ideal for Streamlit's st.write_stream().
+        incrementally.
         """
         import json  # pylint: disable=import-outside-toplevel
 
@@ -148,7 +148,6 @@ class OllamaClient:
         Stream a nurse-facing SBAR alert token by token.
 
         Yields text chunks as they arrive from Ollama.
-        Pass directly to Streamlit's st.write_stream() for a typewriter effect.
         """
         shap_summary = format_for_narrative(explanation)
         enriched = enrich_shap_summary(shap_summary, explanation.top_features)
