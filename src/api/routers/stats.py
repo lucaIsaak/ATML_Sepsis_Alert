@@ -128,8 +128,15 @@ def _hot_reload_model() -> None:
         from src.model.predict import predict_batch  # noqa: PLC0415
         features_df = app.state.features_df
         cohort_df   = app.state.cohort_df
-        sample = features_df.sample(n=min(250, len(features_df)), random_state=99)
-        new_preds = predict_batch(sample, new_artifact)
+        import pandas as _pd  # noqa: PLC0415
+        all_p = predict_batch(features_df, new_artifact)
+        _crit = all_p[all_p["risk_label"] == "CRITICAL"].sample(n=min(5,  len(all_p[all_p["risk_label"] == "CRITICAL"])),  random_state=44)
+        _high = all_p[all_p["risk_label"] == "HIGH"].sample(    n=min(10, len(all_p[all_p["risk_label"] == "HIGH"])),       random_state=44)
+        _mod  = all_p[all_p["risk_label"] == "MODERATE"].sample(n=min(30, len(all_p[all_p["risk_label"] == "MODERATE"])),   random_state=44)
+        _low  = all_p[all_p["risk_label"] == "LOW"]
+        _n_low = max(0, 250 - len(_crit) - len(_high) - len(_mod))
+        _low   = _low.sample(n=min(_n_low, len(_low)), random_state=44)
+        new_preds = _pd.concat([_crit, _high, _mod, _low], ignore_index=True)
         display_cols = ["stay_id"] + [c for c in ["gender", "first_careunit"]
                                        if c in cohort_df.columns]
         new_preds = new_preds.merge(cohort_df[display_cols], on="stay_id", how="left")
