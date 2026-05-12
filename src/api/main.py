@@ -102,8 +102,18 @@ async def lifespan(app: FastAPI):
     artifact = joblib.load(cfg["model"]["artifact_path"])
 
     # Load feature + cohort data
-    features_df = pd.read_parquet("data/processed/features.parquet")
-    cohort_df   = pd.read_parquet("data/processed/cohort.parquet")
+    _features_path = Path("data/processed/features.parquet")
+    _cohort_path   = Path("data/processed/cohort.parquet")
+    if not _features_path.exists() or not _cohort_path.exists():
+        raise RuntimeError(
+            "\n\n"
+            "  [SepsisAlert] Required data files are missing.\n"
+            "  Run the demo setup first:\n\n"
+            "      python setup_demo.py\n\n"
+            "  Then restart the server."
+        )
+    features_df = pd.read_parquet(_features_path)
+    cohort_df   = pd.read_parquet(_cohort_path)
 
     # ── Multivariate OOD statistics ────────────────────────────────────
     # Prefer stats saved by train.py (computed from training split only).

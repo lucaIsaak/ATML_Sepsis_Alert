@@ -406,7 +406,7 @@ async def get_stats(request: Request) -> dict:
         "auprc": round(auprc, 3),
         "total_stays": 93224,
         "sepsis_cases": 9890,
-        "features": len(artifact.get("feature_cols", [])) or 43,
+        "features": len(artifact.get("feature_cols", [])) or 55,
         # Dynamic ROC curves from the sampled predictions
         "roc_sepsis": roc_sepsis,
         "roc_news2": roc_news2,

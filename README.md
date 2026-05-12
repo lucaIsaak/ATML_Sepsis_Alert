@@ -5,6 +5,32 @@
 
 ---
 
+## Quick Start
+
+```bash
+# 1. Generate synthetic demo data and train the demo model (~30 s)
+python setup_demo.py
+
+# 2. Start the API server
+uvicorn src.api.main:app --reload --port 8000
+
+# 3. Start the frontend (separate terminal)
+cd frontend && npm install && npm run dev
+```
+
+Open [http://localhost:5173](http://localhost:5173) — the dashboard is live.
+
+> **Narratives require Ollama.** Install from [ollama.com](https://ollama.com), then run:
+> ```bash
+> ollama pull mistral:7b
+> ollama serve
+> ```
+> Without Ollama the rest of the dashboard (risk scores, SHAP, feedback) works normally.
+
+API explorer (Swagger UI): [http://localhost:8000/docs](http://localhost:8000/docs)
+
+---
+
 ## The Problem
 
 Sepsis kills **11 million people/year** — 1 in 5 global deaths. In European ICUs, ~30% of patients develop sepsis and mortality reaches 41.9%. Every hour of delayed treatment increases mortality by **~7%**.

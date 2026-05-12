@@ -33,6 +33,7 @@ import yaml
 from src.data.patient_buffer import BufferRegistry, Observation
 from src.explainability.shap_explainer import SHAPExplanation, build_explainer, explain_patient
 from src.model.predict import load_model, predict_patient
+from src.narrative.narrative_agent import NarrativeAgent
 from src.narrative.ollama_client import OllamaClient
 from src.safety.guardrails import AuditLogger, InputGuard, NarrativeGuard
 
@@ -349,7 +350,7 @@ class PatientMonitorAgent:  # pylint: disable=too-many-instance-attributes
         patient_context = self._build_context(stay_id)
 
         if tier >= EscalationTier.NURSE:
-            raw_nurse = self._tool_nurse_alert(explanation, patient_context)
+            raw_nurse = self._tool_nurse_alert(explanation, features, patient_context)
             # Layer 2: validate narrative, replace if unsafe
             nurse_nar_result = self.narrative_guard.validate(
                 raw_nurse, format_for_narrative(explanation)
@@ -357,7 +358,7 @@ class PatientMonitorAgent:  # pylint: disable=too-many-instance-attributes
             nurse_narrative = nurse_nar_result.text
 
         if tier >= EscalationTier.DOCTOR:
-            raw_doctor = self._tool_doctor_summary(explanation, patient_context)
+            raw_doctor = self._tool_doctor_summary(explanation, features, patient_context)
             doctor_result = self.narrative_guard.validate(
                 raw_doctor, format_for_narrative(explanation)
             )
@@ -559,13 +560,19 @@ class PatientMonitorAgent:  # pylint: disable=too-many-instance-attributes
         explainer = self._get_explainer()
         return explain_patient(explainer, feature_vector, feature_names, risk_score, stay_id)
 
-    def _tool_nurse_alert(self, explanation: SHAPExplanation, context: str) -> str:
-        """Generate a nurse-facing SBAR narrative."""
-        return self.narrative.generate_nurse_alert(explanation, context)
+    def _tool_nurse_alert(
+        self, explanation: SHAPExplanation, features: dict, context: str
+    ) -> str:
+        """Generate a nurse-facing SBAR narrative via NarrativeAgent reasoning."""
+        agent = NarrativeAgent(self.narrative)
+        return agent.generate(explanation, features, alert_context=context)
 
-    def _tool_doctor_summary(self, explanation: SHAPExplanation, context: str) -> str:
-        """Generate a physician-facing clinical summary."""
-        return self.narrative.generate_doctor_summary(explanation, context)
+    def _tool_doctor_summary(
+        self, explanation: SHAPExplanation, features: dict, context: str
+    ) -> str:
+        """Generate a physician-facing clinical summary via NarrativeAgent reasoning."""
+        agent = NarrativeAgent(self.narrative)
+        return agent.generate(explanation, features, alert_context=context)
 
     def _tool_critical_escalation(
         self, stay_id: str, risk_score: float, mem: PatientMemory
