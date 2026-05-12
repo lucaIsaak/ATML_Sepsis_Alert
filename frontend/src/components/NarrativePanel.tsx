@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Mic, MicOff, Send, Star, Loader2, Zap } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -20,10 +20,24 @@ export function NarrativePanel({ stayId, patientDetail }: NarrativePanelProps) {
   const [isRecording, setIsRecording] = useState(false)
   const [isTranscribing, setIsTranscribing] = useState(false)
   const [feedbackSaved, setFeedbackSaved] = useState(false)
+  const [recordingSeconds, setRecordingSeconds] = useState(0)
 
   const abortRef = useRef<AbortController | null>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
+  const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // Recording duration counter
+  useEffect(() => {
+    if (isRecording) {
+      setRecordingSeconds(0)
+      recordingTimerRef.current = setInterval(() => setRecordingSeconds((s) => s + 1), 1000)
+    } else {
+      if (recordingTimerRef.current) clearInterval(recordingTimerRef.current)
+      setRecordingSeconds(0)
+    }
+    return () => { if (recordingTimerRef.current) clearInterval(recordingTimerRef.current) }
+  }, [isRecording])
 
   const { data: models = [] } = useQuery({
     queryKey: ['models'],
@@ -204,7 +218,16 @@ export function NarrativePanel({ stayId, patientDetail }: NarrativePanelProps) {
             </div>
 
             {isRecording && (
-              <p className="text-xs text-destructive animate-pulse">Recording… click mic to stop</p>
+              <div className="flex items-center gap-2">
+                <span className="inline-block h-2 w-2 rounded-full bg-destructive animate-pulse" />
+                <p className="text-xs text-destructive font-mono">
+                  {String(Math.floor(recordingSeconds / 60)).padStart(2, '0')}:{String(recordingSeconds % 60).padStart(2, '0')}
+                  {' '}— click mic to stop
+                  {recordingSeconds >= 50 && (
+                    <span className="ml-2 font-semibold"> (max 60 s)</span>
+                  )}
+                </p>
+              </div>
             )}
 
             <Button

@@ -161,12 +161,12 @@ function FeedbackAgentCard() {
               <div className="space-y-1">
                 <div className="flex justify-between text-xs">
                   <span className="text-muted-foreground">Confirmed sepsis labels</span>
-                  <span className="font-medium">{status.confirmed_sepsis} / 20</span>
+                  <span className="font-medium">{status.confirmed_sepsis} / 5</span>
                 </div>
                 <div className="h-1.5 rounded-full bg-muted overflow-hidden">
                   <div
                     className="h-full rounded-full bg-primary transition-all"
-                    style={{ width: `${Math.min(100, (status.confirmed_sepsis / 20) * 100)}%` }}
+                    style={{ width: `${Math.min(100, (status.confirmed_sepsis / 5) * 100)}%` }}
                   />
                 </div>
               </div>
@@ -543,7 +543,7 @@ export function ModelPerformance() {
         <MetricCard
           title="SepsisAlert AUROC"
           value={stats.auroc.toFixed(3)}
-          description="+28.1pp vs NEWS2"
+          description={`+${((stats.auroc - stats.news2_auroc) * 100).toFixed(1)}pp vs NEWS2`}
           valueClassName="text-primary"
         />
         <MetricCard

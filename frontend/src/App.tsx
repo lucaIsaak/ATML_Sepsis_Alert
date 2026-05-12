@@ -22,9 +22,10 @@ function Sidebar() {
   const defaultStayId = sorted[0]?.stay_id?.toString() ?? null
   const patientLinkId = stayIdFromUrl ?? defaultStayId
 
-  const highCount = patients.filter((p) => p.risk_label === 'HIGH' || p.risk_label === 'CRITICAL').length
+  const criticalCount = patients.filter((p) => p.risk_label === 'CRITICAL').length
+  const highCount     = patients.filter((p) => p.risk_label === 'HIGH').length
   const moderateCount = patients.filter((p) => p.risk_label === 'MODERATE').length
-  const lowCount = patients.filter((p) => p.risk_label === 'LOW').length
+  const lowCount      = patients.filter((p) => p.risk_label === 'LOW').length
 
   const navItems = [
     { to: '/', end: true, icon: Activity, label: 'Live Monitor' },
@@ -99,6 +100,15 @@ function Sidebar() {
           <div className="h-px bg-border" />
 
           <div className="space-y-1.5">
+            {criticalCount > 0 && (
+              <div className="flex items-center justify-between">
+                <span className="flex items-center gap-1.5 text-xs">
+                  <span className="h-2 w-2 rounded-full bg-red-900 inline-block" />
+                  <span className="text-red-900 font-bold">Critical</span>
+                </span>
+                <span className="text-xs font-bold text-red-900">{criticalCount}</span>
+              </div>
+            )}
             <div className="flex items-center justify-between">
               <span className="flex items-center gap-1.5 text-xs">
                 <span className="h-2 w-2 rounded-full bg-destructive inline-block" />
@@ -124,17 +134,18 @@ function Sidebar() {
 
           {patients.length > 0 && (
             <div className="flex rounded-full overflow-hidden h-1.5">
+              <div className="bg-red-900 transition-all" style={{ width: `${(criticalCount / patients.length) * 100}%` }} />
               <div className="bg-destructive transition-all" style={{ width: `${(highCount / patients.length) * 100}%` }} />
               <div className="bg-amber-400 transition-all" style={{ width: `${(moderateCount / patients.length) * 100}%` }} />
               <div className="bg-emerald-500 transition-all" style={{ width: `${(lowCount / patients.length) * 100}%` }} />
             </div>
           )}
 
-          {highCount > 0 && (
+          {(criticalCount + highCount) > 0 && (
             <div className="rounded-lg bg-destructive/10 border border-destructive/20 px-3 py-2 flex items-center gap-2">
               <AlertTriangle className="h-3.5 w-3.5 text-destructive flex-shrink-0" />
               <p className="text-xs text-destructive font-medium">
-                {highCount} patient{highCount > 1 ? 's' : ''} need attention
+                {criticalCount + highCount} patient{(criticalCount + highCount) > 1 ? 's' : ''} need attention
               </p>
             </div>
           )}

@@ -230,20 +230,41 @@ def main() -> None:
     print("=" * 55)
     print("  SepsisAlert — Demo Setup")
     print("=" * 55)
-    print(f"\n  Generating {N} synthetic ICU patients "
-          f"({int(N * SEPSIS_RATE)} sepsis)...")
-    cohort, features = build_features()
 
-    model_path = Path("models/sepsis_model.pkl")
+    features_path = Path("data/processed/features.parquet")
+    cohort_path   = Path("data/processed/cohort.parquet")
+    model_path    = Path("models/sepsis_model.pkl")
+
+    # Skip synthetic data generation if real processed data already exists.
+    # This preserves MIMIC-IV processed data when running setup_demo.py in a
+    # hospital deployment that has already run the real data pipeline.
+    data_exists = features_path.exists() and cohort_path.exists()
+    if data_exists:
+        print("\n  Processed data found at data/processed/ — skipping synthetic generation.")
+        print("  (delete data/processed/*.parquet to regenerate with synthetic data)")
+        features = pd.read_parquet(features_path)
+        cohort   = pd.read_parquet(cohort_path)
+    else:
+        print(f"\n  Generating {N} synthetic ICU patients "
+              f"({int(N * SEPSIS_RATE)} sepsis)...")
+        cohort, features = build_features()
+
     if model_path.exists():
-        print(f"  Real model found at {model_path} — skipping demo training.")
+        print(f"  Model found at {model_path} — skipping demo training.")
         artifact = joblib.load(model_path)
     else:
-        print("  No trained model found — training demo model on synthetic data...")
+        print("  No trained model found — training demo model on loaded data...")
         artifact = train_demo_model(features)
 
-    print("  Writing to local data/ and models/...")
-    write_local(cohort, features, artifact)
+    if not data_exists:
+        print("  Writing to local data/ and models/...")
+        write_local(cohort, features, artifact)
+    elif not model_path.exists():
+        # Data exists but model is missing — only write the model
+        mdl_dir = Path("models")
+        mdl_dir.mkdir(parents=True, exist_ok=True)
+        joblib.dump(artifact, mdl_dir / "sepsis_model.pkl")
+        print(f"  model artifact  → {mdl_dir / 'sepsis_model.pkl'}")
 
     print("\n  Done. Launch the dashboard with:")
     print("    uvicorn src.api.main:app --reload --port 8000")
