@@ -150,6 +150,14 @@ export default function App() {
     <div className="min-h-screen bg-muted/40">
       <Sidebar />
       <main className="ml-64 p-6 min-h-screen">
+        {/* Geographic training mismatch disclosure — always visible */}
+        <div className="mb-4 rounded-md px-4 py-2.5 text-xs flex items-center gap-2 bg-amber-50 text-amber-800 border border-amber-200">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+          <span>
+            <strong>Training population notice:</strong> Model trained on US tertiary-care ICU data (MIMIC-IV / BIDMC).
+            External validation in European ICU settings is required before clinical deployment.
+          </span>
+        </div>
         <Routes>
           <Route path="/" element={<LiveMonitor />} />
           <Route path="/patient/:stayId" element={<PatientDetailPage />} />

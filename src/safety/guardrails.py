@@ -333,18 +333,36 @@ class NarrativeGuard:
     violation is detected — ensuring alert safety even when the LLM fails.
     """
 
-    def validate(self, narrative: str, shap_summary: str) -> NarrativeResult:
+    def validate(
+        self,
+        narrative: str,
+        shap_summary: str,
+        shap_feature_names: list[str] | None = None,
+    ) -> NarrativeResult:
         """
         Validate a narrative. Return safe text and metadata.
 
         Args:
-            narrative:    Raw LLM output.
-            shap_summary: SHAP-grounded summary used to build the fallback.
+            narrative:          Raw LLM output.
+            shap_summary:       SHAP-grounded summary used to build the fallback.
+            shap_feature_names: Ordered list of top SHAP feature names. When
+                                provided, at least one must appear in the narrative
+                                text — if none match, the narrative is replaced with
+                                the SHAP fallback to prevent grounding-free generation.
         """
         violations: list[str] = []
         for pattern in _PROHIBITED_PATTERNS:
             if pattern.search(narrative):
                 violations.append(pattern.pattern)
+
+        # SHAP grounding check — narrative must reference at least one top feature.
+        if not violations and shap_feature_names:
+            narrative_lower = narrative.lower()
+            # Normalise feature names: underscores → spaces for matching
+            readable_names = [n.replace("_", " ").lower() for n in shap_feature_names]
+            grounded = any(name in narrative_lower for name in readable_names)
+            if not grounded:
+                violations.append("__shap_grounding__: narrative mentions no SHAP feature")
 
         if violations:
             return NarrativeResult(

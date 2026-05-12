@@ -163,6 +163,23 @@ async def lifespan(app: FastAPI):
     # Inject app reference into the stats router (avoids circular import in hot-reload)
     _set_stats_app(app)
 
+    # ── Pseudonymization sanity check ─────────────────────────────────────
+    # Hashed IDs (HMAC-SHA256 → uint64 or hex string) are large and non-sequential.
+    # If stay_ids look like small sequential integers the hospital may not have
+    # applied pseudonymization before sending data. This is a soft warning only —
+    # demo synthetic data intentionally uses sequential IDs.
+    _stay_ids = features_df["stay_id"].dropna().astype(int).tolist()[:20]
+    if _stay_ids and max(_stay_ids) < 1_000_000:
+        _deltas = [abs(_stay_ids[i + 1] - _stay_ids[i]) for i in range(min(9, len(_stay_ids) - 1))]
+        if _deltas and sum(_deltas) / len(_deltas) < 100:
+            warnings.warn(
+                "\n\n  [SepsisAlert] stay_ids appear to be small sequential integers.\n"
+                "  In production, the hospital must pseudonymize patient IDs with\n"
+                "  HMAC-SHA256 before sending data to this system (see README GDPR section).\n"
+                "  This warning is expected for synthetic demo data.\n",
+                stacklevel=1,
+            )
+
     # ── Ollama health check ────────────────────────────────────────────────
     _ollama_url = cfg.get("narrative", {}).get("ollama_base_url", "http://localhost:11434")
     try:

@@ -140,8 +140,23 @@ export function PatientDetailPage() {
         </div>
       )}
 
+      {/* Overreliance on LOW — uncertain LOW scores can be misleading */}
+      {patient.risk_label === 'LOW' && patient.epistemic_uncertainty?.uncertainty_flag === 'HIGH' && (
+        <div className="rounded-md px-4 py-3 text-sm flex items-start gap-3 border bg-amber-50 text-amber-800 border-amber-200">
+          <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-semibold">LOW score — but model confidence is low</p>
+            <p className="mt-0.5 text-xs opacity-80">
+              90% CI: [{patient.epistemic_uncertainty.ci_lower?.toFixed(2) ?? '—'},{' '}
+              {patient.epistemic_uncertainty.ci_upper?.toFixed(2) ?? '—'}].
+              The upper bound reaches into elevated-risk territory. Do not rule out sepsis on this score alone.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Epistemic uncertainty warning — model sensitivity near decision boundary */}
-      {patient.epistemic_uncertainty?.is_uncertain && !patient.multivariate_novel && (
+      {patient.epistemic_uncertainty?.is_uncertain && !patient.multivariate_novel && !(patient.risk_label === 'LOW' && patient.epistemic_uncertainty?.uncertainty_flag === 'HIGH') && (
         <div className={[
           'rounded-md px-4 py-3 text-sm flex items-start gap-3 border',
           patient.epistemic_uncertainty.uncertainty_flag === 'HIGH'
@@ -243,6 +258,10 @@ export function PatientDetailPage() {
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Feature Importance (SHAP)</CardTitle>
+            <p className="text-[11px] text-muted-foreground mt-0.5">
+              SHAP values are computed on the uncalibrated base model. The displayed risk score uses
+              isotonic calibration — small divergences between SHAP attribution and displayed score are expected.
+            </p>
           </CardHeader>
           <CardContent>
             <Tabs defaultValue="top">

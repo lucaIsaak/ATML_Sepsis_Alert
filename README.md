@@ -585,7 +585,9 @@ This is a research prototype. The following are **not** implemented and must be 
 | HTTPS | Run behind a TLS-terminating reverse proxy (nginx, Caddy) |
 | Rate limiting | Add to `/api/retrain` and `/api/narrative/stream` at minimum |
 | Audit log integrity | Current append-only JSONL has no tamper-evidence — use a write-once store |
-| Pseudonymization | Implemented by the hospital before data reaches this system (see GDPR section) |
+| Audit log encryption | `logs/audit.jsonl` is plaintext on disk — encrypt at the filesystem level in production (e.g., LUKS full-disk encryption or VeraCrypt volume) before go-live |
+| Pseudonymization | Implemented by the hospital before data reaches this system (see GDPR section). Startup emits a warning if stay_ids look sequential (indicating the hospital may not have hashed them). |
+| GDPR gate enforcement | No code gate prevents ingestion of unhashed real patient IDs — the pseudonymization contract is architectural. Add an explicit validation step in the FHIR adapter (`src/integrations/fhir_adapter.py`) that rejects IDs matching known real-ID formats before any data enters the pipeline. |
 
 ---
 
