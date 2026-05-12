@@ -188,7 +188,7 @@ The result: the base model provides strong admission-time risk stratification to
 
 ---
 
-## Features (24h Rolling Windows — 43 total)
+## Features (24h Rolling Windows — 55 total)
 
 **Vitals** (from chartevents): Heart Rate, MAP, Respiratory Rate, Temperature, SpO2
 — each with: mean, min, max, last, **trend** (linear slope, units/hour)

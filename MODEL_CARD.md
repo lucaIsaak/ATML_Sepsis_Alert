@@ -93,12 +93,11 @@ Stratified 80/20 split (`random_state=42`). Test set is held out for final evalu
 | Bilirubin (50885) | last, mean, delta, trend |
 | Platelets (51265) | last, mean, delta, trend |
 | Bicarbonate (50882) | last, mean, delta, trend |
-| Chloride (50902) | last, mean, delta, trend |
 | Glucose (50931) | last, mean, delta, trend |
 
 **Demographics:** age, gender (binary encoded)
 
-**Total features:** 59 (after trend columns added)
+**Total features:** 55 (after trend columns added)
 
 ---
 
