@@ -91,10 +91,11 @@ import joblib
 import numpy as np
 import pandas as pd
 import yaml
-from sklearn.calibration import CalibratedClassifierCV
 from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import classification_report, roc_auc_score
 from sklearn.model_selection import train_test_split
+from src.model.calibration import IsotonicCalibrated as _IsotonicCalibrated
 
 # ------------------------------------------------------------------ #
 # Path setup — allow running from repo root                           #
@@ -262,8 +263,10 @@ def train_new_model(
     print("\n  Training new model…")
     model.fit(x_train, y_train, sample_weight=w_train)
 
-    calibrated = CalibratedClassifierCV(model, method="isotonic", cv="prefit")
-    calibrated.fit(x_cal, y_cal)
+    _cal_proba = model.predict_proba(x_cal)[:, 1]
+    _iso       = IsotonicRegression(out_of_bounds="clip")
+    _iso.fit(_cal_proba, y_cal)
+    calibrated = _IsotonicCalibrated(model, _iso)
 
     val_proba = calibrated.predict_proba(x_val)[:, 1]
     val_auroc = float(roc_auc_score(y_val, val_proba))

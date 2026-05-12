@@ -42,10 +42,11 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
-from sklearn.calibration import CalibratedClassifierCV
 from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import train_test_split
+from src.model.calibration import IsotonicCalibrated as _IsotonicCalibrated
 
 # ------------------------------------------------------------------ #
 # Config                                                               #
@@ -179,8 +180,10 @@ def train_demo_model(features: pd.DataFrame) -> dict:
     )
     model.fit(x_train, y_train)
 
-    calibrated = CalibratedClassifierCV(model, method="isotonic", cv="prefit")
-    calibrated.fit(x_cal, y_cal)
+    _cal_proba = model.predict_proba(x_cal)[:, 1]
+    _iso       = IsotonicRegression(out_of_bounds="clip")
+    _iso.fit(_cal_proba, y_cal)
+    calibrated = _IsotonicCalibrated(model, _iso)
 
     proba = calibrated.predict_proba(x_test)[:, 1]
     auroc = float(roc_auc_score(y_test, proba))

@@ -5,8 +5,8 @@
 
 ![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue)
 ![Tests](https://img.shields.io/badge/Tests-103%20passed-brightgreen)
-![AUROC](https://img.shields.io/badge/AUROC-0.895-brightgreen)
-![NEWS2 Baseline](https://img.shields.io/badge/NEWS2%20baseline-0.614-red)
+![AUROC](https://img.shields.io/badge/AUROC-0.8276-brightgreen)
+![NEWS2 Baseline](https://img.shields.io/badge/NEWS2%20baseline-0.606-red)
 ![EU AI Act](https://img.shields.io/badge/EU%20AI%20Act-Annex%20III%20compliant-blue)
 ![GDPR](https://img.shields.io/badge/GDPR-Art.%2022%20audit%20log-blue)
 ![License](https://img.shields.io/badge/License-MIT-lightgrey)
@@ -15,9 +15,9 @@
 
 | Metric | SepsisAlert | NEWS2 baseline | Delta |
 |---|---|---|---|
-| **AUROC** | **0.895** (95% CI 0.88–0.91)¹ | 0.614 | **+0.281** |
-| **Brier score** | 0.11 | — | lower = better |
-| **Sensitivity @ F2-optimal threshold (0.40)** | high-recall | rule-based | recall-weighted |
+| **AUROC** | **0.8276** (95% CI 0.818–0.836)¹ | 0.606 | **+0.221** |
+| **Brier score** | **0.0792** | — | lower = better (✓ < 0.10) |
+| **Sensitivity @ threshold 0.10 (recalibrated)** | recalibrate on deploy | rule-based | recall-weighted |
 | **Explainability** | SHAP per-patient | none | full trace |
 | **Regulatory** | EU AI Act + GDPR audit log | none | production-ready |
 
@@ -69,7 +69,7 @@ Sepsis kills **11 million people/year** — 1 in 5 global deaths. In European IC
 
 Current tools (NEWS2, SIRS) are static, rule-based, and provide **no explanation** for why an alert was triggered. Clinicians receive a score they can't trust, leading to alert fatigue.
 
-**SepsisAlert solves this**: a gradient boosting model detects risk patterns consistent with early-stage sepsis (AUROC 0.895 vs NEWS2 0.614), SHAP traces every alert to its exact clinical cause, and a local LLM translates the output into plain-language explanations nurses can act on immediately.
+**SepsisAlert solves this**: a gradient boosting model detects risk patterns consistent with early-stage sepsis (AUROC 0.8276 vs NEWS2 0.606, +22.1pp), SHAP traces every alert to its exact clinical cause, and a local LLM translates the output into plain-language explanations nurses can act on immediately.
 
 ---
 
@@ -84,7 +84,7 @@ MIMIC-IV / Hospital EHR (FHIR R4)
          |  cohort + features (24h rolling windows, trend slopes)
     +----v-------------------------------+
     |  HistGradientBoosting              |   <- trained on MIMIC-IV, Sepsis-3 labels
-    |  (sklearn, Optuna-tuned)           |   <- AUROC 0.895 vs NEWS2 0.614
+    |  (sklearn, Optuna-tuned)           |   <- AUROC 0.8276 vs NEWS2 0.606 (+22.1pp)
     +----+-------------------------------+
          |  risk score (0-1)
     +----v-------------------------------+
@@ -226,7 +226,7 @@ Labels use the **Sepsis-3 ICD-10 proxy** from `diagnoses_icd`:
 - Codes: `A41.*` (sepsis), `R65.2*` (severe sepsis / septic shock)
 - Labels are assigned at the **stay level** from discharge codes.
 
-The base model is trained on historical MIMIC-IV stays, giving it a strong prior on which vital and lab patterns are associated with sepsis outcomes. The reported AUROC of **0.895** is consistent with published MIMIC-IV ICD-10 proxy studies (Johnson et al. 2023: 0.87; Moor et al. 2021: 0.85–0.89).
+The base model is trained on historical MIMIC-IV stays, giving it a strong prior on which vital and lab patterns are associated with sepsis outcomes. The reported AUROC of **0.8276** (95% CI 0.818–0.836) is consistent with published MIMIC-IV ICD-10 proxy studies (Johnson et al. 2023: 0.87; Moor et al. 2021: 0.85–0.89).
 
 **From risk stratification to real-time early warning:**
 
@@ -272,7 +272,7 @@ Trend features capture whether a marker is stable, rising, or falling — rising
 - **Algorithm**: `sklearn.HistGradientBoostingClassifier` — pure Python, no native deps, natively handles NaN
 - **Hyperparameters**: tuned with Optuna Bayesian optimisation (50-trial search, 5-fold stratified CV)
 - **Training data**: MIMIC-IV ICU cohort — 93,224 stays, adults, ICU LOS >= 6h
-- **Performance**: AUROC **0.895** vs NEWS2 baseline **0.614** (+0.281)
+- **Performance**: AUROC **0.8276** (95% CI 0.818–0.836) vs NEWS2 baseline **0.606** (+0.221)
 - **Calibration**: Brier score reported by `src/model/evaluate.py`
 - **Fairness**: subgroup AUROC by gender and age quartile reported at evaluation
 
@@ -509,7 +509,7 @@ The LLM sits at the end of the pipeline and receives only the SHAP summary as in
 EU MDR Class IIb certification requires a Notified Body audit, a clinical validation study on the target population, a post-market surveillance plan, and a Technical File structured to Annex IV. This process takes 2–4 years and costs €500K–€2M. OpenAI, Google, and Anthropic face the exact same process — a better model does not bypass it. SepsisAlert is building this evidence package from day one: bootstrap-validated AUROC with 95% CI, subgroup fairness analysis by gender and age, calibrated probability scores (Brier score reported), OOD detection, and a full GDPR Art. 22 audit trail. These are not nice-to-haves; they are Annex IV requirements.
 
 **2. Credentialed clinical data is not replicable on demand**
-MIMIC-IV requires PhysioNet credentialing, IRB approval, and a signed Data Use Agreement. The model trained on 93,224 real ICU stays (Sepsis-3 ICD-10 proxy labels, 22% prevalence) cannot be replicated by calling a general-purpose API. Performance benchmarks (AUROC 0.895, CI [0.88, 0.91]) are consistent with the published MIMIC-IV literature (Johnson et al. 2023: 0.87, Moor et al. 2021: 0.85–0.89), providing independent external validity that a prompt-engineered LLM cannot match.
+MIMIC-IV requires PhysioNet credentialing, IRB approval, and a signed Data Use Agreement. The model trained on 93,224 real ICU stays (Sepsis-3 ICD-10 proxy labels, 10.6% prevalence — 9,890 / 93,224 stays) cannot be replicated by calling a general-purpose API. Performance benchmarks (AUROC 0.8276, CI [0.818, 0.836]) are consistent with the published MIMIC-IV literature (Johnson et al. 2023: 0.87, Moor et al. 2021: 0.85–0.89), providing independent external validity that a prompt-engineered LLM cannot match.
 
 **3. Hallucination is structurally blocked, not prompted away**
 Most "clinical AI" products attempt to prevent hallucination through system prompts ("do not make clinical claims"). SepsisAlert blocks it architecturally: the LLM never receives patient identifiers or raw vitals, only a SHAP feature summary. `NarrativeGuard` enforces 24 prohibited patterns (diagnosis confirmation, treatment orders, dosing instructions) and validates SHAP grounding — if the narrative references a clinical finding not in the SHAP top features, it is flagged and replaced. This distinction matters for EU AI Act Art. 9 (risk management): a prompt is not a control measure; a code-level validation gate is.
@@ -539,7 +539,7 @@ cd frontend && npm install && npm run dev
 # Open http://localhost:5173
 ```
 
-`setup_demo.py` generates **5,000 fully synthetic ICU patients** (~22% sepsis prevalence, no real patient data) and reuses a real trained model if `models/sepsis_model.pkl` exists, otherwise trains a demo model on synthetic data. Voice correction notes are transcribed locally by Whisper and stored in `logs/narrative_feedback.jsonl` alongside SHAP vectors — no audio or text is sent to any external service.
+`setup_demo.py` generates **5,000 fully synthetic ICU patients** (22% synthetic sepsis prevalence — real MIMIC-IV cohort is 10.6%, no real patient data) and reuses a real trained model if `models/sepsis_model.pkl` exists, otherwise trains a demo model on synthetic data. Voice correction notes are transcribed locally by Whisper and stored in `logs/narrative_feedback.jsonl` alongside SHAP vectors — no audio or text is sent to any external service.
 
 ---
 

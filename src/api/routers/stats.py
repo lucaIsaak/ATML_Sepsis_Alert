@@ -128,7 +128,7 @@ def _hot_reload_model() -> None:
         from src.model.predict import predict_batch  # noqa: PLC0415
         features_df = app.state.features_df
         cohort_df   = app.state.cohort_df
-        sample = features_df.sample(n=min(100, len(features_df)), random_state=99)
+        sample = features_df.sample(n=min(250, len(features_df)), random_state=99)
         new_preds = predict_batch(sample, new_artifact)
         display_cols = ["stay_id"] + [c for c in ["age", "gender", "first_careunit"]
                                        if c in cohort_df.columns]
@@ -275,7 +275,7 @@ async def get_model_info(request: Request) -> dict:
     model_type = type(artifact.get("model", None)).__name__ if artifact.get("model") else "Unknown"
     return {
         "algorithm":       f"{model_type} (sklearn {sklearn.__version__})",
-        "auroc":           float(artifact.get("auroc", 0.895)),
+        "auroc":           float(artifact.get("auroc", 0.8276)),
         "feature_count":   len(artifact.get("feature_cols", [])),
         "sklearn_version": sklearn.__version__,
         "training_data":   "MIMIC-IV v3.1 — 93,224 ICU stays",
@@ -388,7 +388,7 @@ async def get_stats(request: Request) -> dict:
     roc_news2 = _roc_curve_points(y_true, news2_scores)
 
     artifact = request.app.state.artifact
-    auroc = float(artifact.get("auroc", 0.895))
+    auroc = float(artifact.get("auroc", 0.8276))
 
     # Compute AUPRC dynamically from the current predictions + ground truth
     auprc = _pr_curve_auprc(y_true, y_score)
@@ -397,15 +397,15 @@ async def get_stats(request: Request) -> dict:
     try:
         news2_auroc = float(_roc_auc(y_true, news2_scores))
     except Exception:  # pylint: disable=broad-except
-        news2_auroc = 0.614  # fallback if computation fails
+        news2_auroc = 0.606  # fallback if computation fails
 
     return {
         # AUROC read from the actual trained artifact — updates after retrain
         "auroc": auroc,
         "news2_auroc": round(news2_auroc, 3),
         "auprc": round(auprc, 3),
-        "total_stays": 93224,
-        "sepsis_cases": 9890,
+        "total_stays": 93_224,
+        "sepsis_cases": 9_890,
         "features": len(artifact.get("feature_cols", [])) or 55,
         # Dynamic ROC curves from the sampled predictions
         "roc_sepsis": roc_sepsis,
