@@ -556,42 +556,77 @@ Covers: model inference, clinical schema validation, SBAR prompt structure, LLM 
 
 ## Production Deployment
 
-> The demo runs on a single machine. Production deployment adds three components: a reverse proxy, authentication, and process management.
+### Docker (recommended)
 
-**Recommended hospital deployment stack:**
+The fastest path to a running system — one command starts the API and the React dashboard:
+
+```bash
+cp .env.example .env          # configure CORS_ORIGINS etc. if needed
+docker-compose up --build     # builds API + frontend, starts both
+```
+
+| URL | What |
+|---|---|
+| `http://localhost` | React dashboard (nginx) |
+| `http://localhost:8000/docs` | FastAPI Swagger UI |
+
+On first start, `setup_demo.py` runs automatically inside the API container — generates 5,000 synthetic patients and trains the demo model. Subsequent starts reuse the persisted volumes (`data/`, `models/`, `logs/`).
+
+**Narratives (optional):** Ollama runs on the host, not inside Docker. Start it before `docker-compose up`:
+```bash
+ollama pull mistral:7b && ollama serve
+```
+The compose file points the API at `host.docker.internal:11434` by default.
+
+### Manual deployment (without Docker)
 
 ```
 [Hospital network]
-  nginx (reverse proxy + TLS termination)
-    └── FastAPI (uvicorn, 2+ workers)         ← src/api/main.py
-    └── React build (static files served by nginx)
-    └── Ollama (local GPU node, internal only)
+  nginx (reverse proxy + TLS)
+    └── FastAPI (uvicorn, 2+ workers)    ← src/api/main.py
+    └── React build (served by nginx)
+    └── Ollama (local GPU node)
 ```
-
-**Steps:**
 
 ```bash
-# 1. Build the frontend for production
-cd frontend && npm run build
-# Static files → frontend/dist/ — serve via nginx
+# 1. Build React for production
+cd frontend && npm run build             # output → frontend/dist/
 
-# 2. Run the API with multiple workers
+# 2. Start API
+cp .env.example .env                     # set CORS_ORIGINS
 uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --workers 2
-
-# 3. Configure environment
-cp .env.example .env
-# Set CORS_ORIGINS to your hospital's domain
 ```
 
-**nginx config snippet:**
+nginx snippet:
 ```nginx
-location /api/ { proxy_pass http://127.0.0.1:8000; }
+location /api/ { proxy_pass http://127.0.0.1:8000; proxy_buffering off; }
 location /     { root /path/to/frontend/dist; try_files $uri /index.html; }
 ```
 
-**Authentication:** The current API has no authentication layer — appropriate for a hospital-internal deployment behind a firewall or VPN. For internet-facing deployments, add OAuth2/OIDC via FastAPI's `SecurityScopes` or an API gateway (e.g. Azure API Management for NHS/hospital environments). This is a known gap for the prototype.
+### Authentication
 
-**Note on multi-worker caching:** The module-level SHAP/OOD caches in `patients.py` are per-process. With `--workers 2`, each worker has its own cache. For production with multiple workers, replace with a shared Redis cache or sticky sessions via nginx `ip_hash`.
+The API currently has no authentication layer — correct for a hospital-internal deployment where the server sits behind the hospital firewall or VPN and is only reachable on the internal network.
+
+For internet-facing deployments, the recommended approach is **API key middleware** (simple, no external dependency):
+
+```python
+# src/api/middleware/auth.py — add to main.py
+from fastapi import Request, HTTPException
+from starlette.middleware.base import BaseHTTPMiddleware
+import os
+
+class APIKeyMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if request.url.path.startswith("/api/"):
+            key = request.headers.get("X-API-Key")
+            if key != os.getenv("API_KEY"):
+                raise HTTPException(status_code=401, detail="Unauthorized")
+        return await call_next(request)
+```
+
+For full hospital SSO integration, FastAPI supports **OAuth2/OIDC** natively via `fastapi.security.OAuth2AuthorizationCodeBearer` — this connects to the hospital's existing identity provider (Azure AD, Keycloak) so nurses and doctors log in with their hospital credentials. This is the production path for CE-marked deployment.
+
+**Note on multi-worker caching:** With `--workers 2`, each worker process has its own SHAP/OOD cache. For multi-worker production deployments, replace with Redis-backed caching or use nginx `ip_hash` for sticky sessions.
 
 ---
 
