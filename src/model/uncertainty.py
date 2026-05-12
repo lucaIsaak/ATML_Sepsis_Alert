@@ -34,12 +34,17 @@ require an ensemble or conformal prediction), but it is well-calibrated for
 gradient-boosted trees because perturbations that cross a split boundary produce
 a measurable output change, while perturbations within the same leaf cancel out.
 
-THRESHOLDS (empirically calibrated on MIMIC-IV validation split)
-=================================================================
+THRESHOLDS
+==========
   LOW      variance < 0.003   — prediction is stable; use risk score normally
   MODERATE 0.003 ≤ var < 0.01 — some sensitivity; note uncertainty in narrative
   HIGH     var ≥ 0.01         — near many boundaries; flag for human review
                                  regardless of the point estimate's magnitude
+
+These thresholds are conservative defaults derived from the expected variance
+of a well-calibrated GBDT under 10% Gaussian noise (α=0.10).  They should be
+validated against your deployment data and tightened as labelled feedback
+accumulates.
 """
 
 from __future__ import annotations
