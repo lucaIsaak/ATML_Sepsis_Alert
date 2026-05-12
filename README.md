@@ -17,7 +17,8 @@ pip install -r requirements.txt
 ```
 
 ```bash
-# 1. Generate synthetic demo data and train the demo model (~30 s)
+# 1. FIRST: generate synthetic demo data and train the demo model (~30 s)
+#    The API will not start without this step.
 python setup_demo.py
 
 # 2. Start the API server
