@@ -21,7 +21,7 @@ export function LiveMonitor() {
     queryFn: getModelStats,
   })
 
-  const highCount = patients.filter((p) => p.risk_label === 'HIGH').length
+  const highCount = patients.filter((p) => p.risk_label === 'HIGH' || p.risk_label === 'CRITICAL').length
   const modCount = patients.filter((p) => p.risk_label === 'MODERATE').length
   const lowCount = patients.filter((p) => p.risk_label === 'LOW').length
 
@@ -126,7 +126,7 @@ export function LiveMonitor() {
                           onClick={() => navigate(`/patient/${p.stay_id}`)}
                           className={[
                             'border-b cursor-pointer transition-colors hover:bg-muted/60',
-                            p.risk_label === 'HIGH' ? 'bg-red-50/60' : '',
+                            (p.risk_label === 'CRITICAL' || p.risk_label === 'HIGH') ? 'bg-red-50/60' : '',
                             p.risk_label === 'MODERATE' ? 'bg-amber-50/40' : '',
                           ]
                             .filter(Boolean)

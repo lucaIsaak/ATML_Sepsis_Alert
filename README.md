@@ -146,7 +146,7 @@ Safety is built into every alert cycle (`src/safety/guardrails.py`) and enforced
 | Layer | What it does | Why |
 |---|---|---|
 | **InputGuard** | OOD detection via z-score against training distribution and hard physiological bounds. Flags `NORMAL / CAUTION / LOW_CONFIDENCE`. | Prevents silent model extrapolation on implausible inputs |
-| **NarrativeGuard** | Validates LLM output for 20+ prohibited patterns (confirmed diagnoses, definitive treatment orders, dosing instructions). Replaces with deterministic SHAP fallback if violated. | Guarantees clinical safety even if Ollama misbehaves |
+| **NarrativeGuard** | Validates LLM output for 24 prohibited patterns (confirmed diagnoses, definitive treatment orders, dosing instructions). Replaces with deterministic SHAP fallback if violated. | Guarantees clinical safety even if Ollama misbehaves |
 | **AuditLogger** | Append-only JSONL log: timestamp, risk score, tier, OOD flag, narrative replacement flag. | GDPR Art. 22 (automated decision transparency) + EU AI Act Annex III |
 
 All three layers are wired into every FastAPI router — no guardrail is bypassed. The audit log is accessible via `GET /audit`.
@@ -246,7 +246,7 @@ The result: the base model provides strong admission-time risk stratification to
 
 ---
 
-## Features (24h Rolling Windows — 43 total)
+## Features (24h Rolling Windows — 55 total)
 
 **Vitals** (from chartevents): Heart Rate, MAP, Respiratory Rate, Temperature, SpO2
 — each with: mean, min, max, last, **trend** (linear slope, units/hour)
@@ -360,7 +360,7 @@ Prompts are SBAR-structured and grounded in SHAP output only. The LLM **cannot**
 
 ## REST API (FastAPI backend)
 
-The full stack includes a FastAPI backend alongside the Streamlit dashboard. It serves the React frontend and exposes all model capabilities programmatically.
+The FastAPI backend serves the React frontend and exposes all model capabilities programmatically.
 
 ```
 GET  /patients                  — list all sampled patients, sorted by risk score
@@ -551,6 +551,47 @@ pytest tests/ -v
 ```
 
 Covers: model inference, clinical schema validation, SBAR prompt structure, LLM client fallback, and all three safety guardrail layers (22 tests total).
+
+---
+
+## Production Deployment
+
+> The demo runs on a single machine. Production deployment adds three components: a reverse proxy, authentication, and process management.
+
+**Recommended hospital deployment stack:**
+
+```
+[Hospital network]
+  nginx (reverse proxy + TLS termination)
+    └── FastAPI (uvicorn, 2+ workers)         ← src/api/main.py
+    └── React build (static files served by nginx)
+    └── Ollama (local GPU node, internal only)
+```
+
+**Steps:**
+
+```bash
+# 1. Build the frontend for production
+cd frontend && npm run build
+# Static files → frontend/dist/ — serve via nginx
+
+# 2. Run the API with multiple workers
+uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --workers 2
+
+# 3. Configure environment
+cp .env.example .env
+# Set CORS_ORIGINS to your hospital's domain
+```
+
+**nginx config snippet:**
+```nginx
+location /api/ { proxy_pass http://127.0.0.1:8000; }
+location /     { root /path/to/frontend/dist; try_files $uri /index.html; }
+```
+
+**Authentication:** The current API has no authentication layer — appropriate for a hospital-internal deployment behind a firewall or VPN. For internet-facing deployments, add OAuth2/OIDC via FastAPI's `SecurityScopes` or an API gateway (e.g. Azure API Management for NHS/hospital environments). This is a known gap for the prototype.
+
+**Note on multi-worker caching:** The module-level SHAP/OOD caches in `patients.py` are per-process. With `--workers 2`, each worker has its own cache. For production with multiple workers, replace with a shared Redis cache or sticky sessions via nginx `ip_hash`.
 
 ---
 

@@ -1,7 +1,7 @@
 export interface Patient {
   stay_id: number
   risk_score: number
-  risk_label: 'HIGH' | 'MODERATE' | 'LOW'
+  risk_label: 'CRITICAL' | 'HIGH' | 'MODERATE' | 'LOW'
   age: number
   first_careunit: string
   gender?: string

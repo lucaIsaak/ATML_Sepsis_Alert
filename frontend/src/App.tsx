@@ -22,7 +22,7 @@ function Sidebar() {
   const defaultStayId = sorted[0]?.stay_id?.toString() ?? null
   const patientLinkId = stayIdFromUrl ?? defaultStayId
 
-  const highCount = patients.filter((p) => p.risk_label === 'HIGH').length
+  const highCount = patients.filter((p) => p.risk_label === 'HIGH' || p.risk_label === 'CRITICAL').length
   const moderateCount = patients.filter((p) => p.risk_label === 'MODERATE').length
   const lowCount = patients.filter((p) => p.risk_label === 'LOW').length
 
