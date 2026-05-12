@@ -11,10 +11,12 @@ Start the frontend:
 import asyncio
 import logging
 import traceback
+import warnings
 from contextlib import asynccontextmanager
 from datetime import datetime
 import os
 from pathlib import Path
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -160,6 +162,20 @@ async def lifespan(app: FastAPI):
 
     # Inject app reference into the stats router (avoids circular import in hot-reload)
     _set_stats_app(app)
+
+    # ── Ollama health check ────────────────────────────────────────────────
+    _ollama_url = cfg.get("narrative", {}).get("ollama_base_url", "http://localhost:11434")
+    try:
+        requests.get(f"{_ollama_url}/api/tags", timeout=3)
+        print("[Startup] Ollama is running — narrative endpoints ready.")
+    except Exception:
+        warnings.warn(
+            "\n\n  [SepsisAlert] Ollama is not running.\n"
+            "  Narrative endpoints will fail until you run:\n\n"
+            "      ollama serve\n\n"
+            "  Pull the model first if needed:  ollama pull mistral:7b\n",
+            stacklevel=1,
+        )
 
     # Start periodic background monitoring (1-hour cycle).
     # run_immediately=True: first pass executes in the thread pool right away,

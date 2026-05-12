@@ -177,12 +177,23 @@ async def stream_narrative(body: StreamRequest, request: Request):
         yield ""
 
         # 1. Collect full agent output (required for NarrativeGuard validation)
-        chunks = list(agent.stream_generate(
-            explanation,
-            features=features_dict,
-            few_shot_context=context,
-            alert_context=alert_context,
-        ))
+        try:
+            chunks = list(agent.stream_generate(
+                explanation,
+                features=features_dict,
+                few_shot_context=context,
+                alert_context=alert_context,
+            ))
+        except requests.exceptions.ConnectionError:
+            yield (
+                "[Narrative unavailable] Ollama is not running.\n"
+                "Start it with:  ollama serve\n"
+                "Pull the model if needed:  ollama pull mistral:7b"
+            )
+            return
+        except Exception as exc:
+            yield f"[Narrative unavailable] Generation failed: {exc}"
+            return
         full_text = "".join(chunks)
 
         # 2. Validate with NarrativeGuard (Layer 2 safety)
