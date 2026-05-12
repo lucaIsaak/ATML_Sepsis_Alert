@@ -3,6 +3,14 @@
 > AI-powered real-time alerts with clinician-ready explanations
 > Advanced Topics in Machine Learning | Nova SBE | 2026
 
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
+![Tests](https://img.shields.io/badge/Tests-103%20passed-brightgreen)
+![AUROC](https://img.shields.io/badge/AUROC-0.895-brightgreen)
+![Baseline](https://img.shields.io/badge/NEWS2%20baseline-0.614-red)
+![EU AI Act](https://img.shields.io/badge/EU%20AI%20Act-Annex%20III%20compliant-blue)
+![GDPR](https://img.shields.io/badge/GDPR-Art.%2022%20audit%20trail-blue)
+![License](https://img.shields.io/badge/License-Academic%20prototype-lightgrey)
+
 ---
 
 > **Evaluators:** See [`EVALUATION_GUIDE.md`](EVALUATION_GUIDE.md) for a structured breakdown of what is

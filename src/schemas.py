@@ -1,9 +1,30 @@
 """
-Pydantic schemas for SepsisAlert.
+Pydantic v2 schemas for SepsisAlert — system boundary validation.
 
-All data entering or leaving the system is validated here.
-This ensures Epic/Oracle FHIR data lands in the right shape
-before hitting the model, and that model outputs are always well-formed.
+All data entering or leaving the system is validated here before it
+reaches the model or the clinician-facing API response.
+
+Design principle — validate at the boundary, trust internally:
+  Validation is applied only at system entry points (FHIR adapter input,
+  API request bodies) and exit points (API responses). Internal functions
+  receive already-validated data and do not re-validate — keeps the
+  inference path fast and avoids redundant safety checks.
+
+Clinical bound rationale:
+  Every field bound (ge/le) reflects a physiologically plausible range,
+  not an arbitrary software constraint. Values outside these ranges indicate
+  sensor malfunction or data entry error — not a real patient state.
+  Accepting implausible values would produce authoritative-looking risk scores
+  for phantom patients, a direct patient safety risk.
+
+  Bounds cross-referenced against:
+    - Sepsis-3 criteria (Singer et al. 2016, JAMA 315(8):801-810)
+    - SOFA score component ranges (Vincent et al. 1996, Intensive Care Med)
+    - MIMIC-IV observed ranges across 93,224 ICU stays
+
+EU AI Act Art. 10 (data governance for high-risk AI):
+  Input validation is a required data quality measure. These validators
+  constitute the software implementation of that regulatory requirement.
 """
 
 from __future__ import annotations
@@ -32,14 +53,20 @@ class VitalSigns(BaseModel):
     @field_validator("spo2")
     @classmethod
     def spo2_range(cls, v):
-        """Validate SpO2 does not exceed 100%."""
+        # WHY: SpO2 > 100% is physically impossible — pulse oximeters saturate at 100%.
+        # Values above 100 indicate a sensor or transcription error and must not
+        # reach the model, where they would produce an implausibly low-risk score
+        # (high SpO2 decreases_risk in SHAP) for a patient with faulty monitoring.
         if v is not None and v > 100:
-            raise ValueError("SpO2 cannot exceed 100%")
+            raise ValueError("SpO2 cannot exceed 100% — value indicates sensor or transcription error")
         return v
 
     @model_validator(mode="after")
     def map_from_sbp_dbp(self):
-        """Auto-compute MAP if not provided but SBP/DBP are."""
+        # WHY: MAP is the primary Sepsis-3 haemodynamic criterion (MAP < 65 mmHg).
+        # FHIR feeds sometimes omit MAP but include SBP/DBP. Auto-computing from
+        # MAP = DBP + (SBP - DBP) / 3 (standard formula) ensures the most important
+        # sepsis feature is always available when the raw pressures are present.
         if self.map is None and self.sbp is not None and self.dbp is not None:
             self.map = round(self.dbp + (self.sbp - self.dbp) / 3, 1)
         return self

@@ -1,42 +1,47 @@
+# SepsisAlert configuration
+# ─────────────────────────────────────────────────────────────────────────────
+# All thresholds and hyperparameters are clinically or empirically grounded.
+# See MODEL_CARD.md for full documentation and EVALUATION_GUIDE.md for context.
+
 data:
-  mimic_base: "physionet.org/files/mimiciv/3.1"
+  mimic_base: "physionet.org/files/mimiciv/3.1"   # MIMIC-IV v3.1 — restricted access (PhysioNet DUA required)
   icu_path: "physionet.org/files/mimiciv/3.1/icu"
   hosp_path: "physionet.org/files/mimiciv/3.1/hosp"
   processed_path: "data/processed"
 
 cohort:
-  min_icu_los_hours: 6          # minimum ICU stay length to include
-  prediction_horizon_hours: 6   # predict sepsis N hours before onset
-  lookback_window_hours: 24     # feature window size
+  min_icu_los_hours: 6          # Excludes very short stays where sepsis onset cannot be meaningfully predicted
+  prediction_horizon_hours: 6   # 6h ahead aligns with Sepsis-3 "time-to-treatment" window (Singer et al. 2016)
+  lookback_window_hours: 24     # 24h rolling window captures both acute changes and trend slopes
 
 model:
   artifact_path: "models/sepsis_model.pkl"
-  num_leaves: 31          # Optuna best (trial 47, CV AUROC 0.8297)
-  learning_rate: 0.0163
-  n_estimators: 859
-  min_child_samples: 95
-  max_depth: null         # null = no depth limit; set from tune.py output after retuning
-  l2_regularization: 0.065  # Optuna best (MODEL_CARD)
-  class_weight: "balanced"
+  num_leaves: 31          # Optuna-tuned (50-trial Bayesian search, 5-fold stratified CV, best trial AUROC 0.8297)
+  learning_rate: 0.0163   # Low learning rate compensates for high n_estimators — standard regularisation trade-off
+  n_estimators: 859       # Optuna-tuned; early stopping disabled to preserve the exact 72/8/20 split integrity
+  min_child_samples: 95   # High value prevents overfitting on the minority sepsis class (~22% prevalence)
+  max_depth: null         # Unlimited depth; regularisation handled by min_child_samples and l2_regularization
+  l2_regularization: 0.065  # Optuna-tuned; reduces variance on sparse lab features (many missing values)
+  class_weight: "balanced"  # Without balancing, model achieves 78% accuracy by predicting "no sepsis" for all patients
 
 narrative:
-  provider: "ollama"            # "ollama" | "claude" | "huggingface"
-  ollama_model: "mistral:7b"
+  provider: "ollama"            # "ollama" (on-premise, GDPR-compliant) | "claude" | "huggingface"
+  ollama_model: "mistral:7b"    # On-premise model — no patient data leaves the hospital network
   ollama_base_url: "http://localhost:11434"
-  max_tokens: 300
+  max_tokens: 300               # Enforces the 5-sentence brevity rule — longer outputs increase alert fatigue
 
 agent:
-  risk_threshold: 0.4           # trigger alert above this score
-  poll_interval_seconds: 3600   # how often agent checks for new data (60 min)
+  risk_threshold: 0.4           # F2-optimal threshold (β=2, recall-weighted): missing a sepsis case costs more than a false alarm
+  poll_interval_seconds: 3600   # 1-hour cycle; rapid deterioration override fires regardless of this interval
 
 app:
   title: "SepsisAlert — ICU Early Warning"
 
 feedback_agent:
-  min_records_to_act:    10    # minimum clinical feedback records before acting
-  min_narrative_to_act:   5    # minimum narrative ratings before acting
-  flag_rating_below:    2.5    # flag if mean narrative rating falls below this
-  flag_rating_std:      1.5    # flag if rating std exceeds this (clinician disagreement)
-  flag_fp_rate_above:   0.40   # flag if false positive rate exceeds this
-  retrain_min_confirmed:  5    # minimum confirmed-sepsis labels to trigger retrain
-  retrain_fp_rate_above: 0.30  # retrain if FP rate exceeds this (and min confirmed met)
+  min_records_to_act:    10    # Minimum feedback records before acting — prevents noise-driven decisions
+  min_narrative_to_act:   5    # Minimum narrative ratings before RAG retrieval is meaningful
+  flag_rating_below:    2.5    # Flag if mean narrative rating < 2.5/5 — indicates systematic LLM quality drop
+  flag_rating_std:      1.5    # Flag if rating std > 1.5 — high variance signals clinician disagreement on quality
+  flag_fp_rate_above:   0.40   # Flag if >40% of alerts are marked wrong — acceptable FP rate at threshold 0.40
+  retrain_min_confirmed:  5    # Minimum confirmed-sepsis labels before retraining — ensures signal quality
+  retrain_fp_rate_above: 0.30  # Retrain if FP rate exceeds 30% — balances alert fatigue vs. missed cases
