@@ -1,8 +1,25 @@
 """
-Clinician feedback storage.
+Clinician feedback storage and retraining label bridge.
 
-Persists alert-level feedback (confirmed sepsis / flagged wrong) to an
-append-only JSONL file.  No external database required.
+This module closes the active-learning loop: clinician labels captured here
+flow into retrain_with_feedback.py, which retrains the model with differential
+sample weights that trust verified clinical judgement more than automated
+Sepsis-3 ICD-10 proxy labels (which carry ~15% label noise from coding practice).
+
+Design decisions:
+  - Append-only JSONL: no record is ever deleted or modified — every label is
+    timestamped and retained. This satisfies GDPR Art. 22 (right to explanation
+    of automated decisions) and supports post-hoc clinical governance review.
+  - Two feedback types only ("confirmed_sepsis", "flagged_wrong"): a richer
+    taxonomy would produce too few samples per class for meaningful differential
+    weighting at prototype scale.
+  - Risk score stored at label time: allows detection of score drift — cases
+    labelled correct at 0.7 that now score 0.5 indicate model degradation.
+
+Differential weights applied at retraining (retrain_with_feedback.py):
+  confirmed_sepsis → weight 3.0  (clinician-verified, high confidence)
+  flagged_wrong    → weight 0.5  (provisional negative — may be a near-miss)
+  automated label  → weight 1.0  (baseline)
 """
 
 from __future__ import annotations

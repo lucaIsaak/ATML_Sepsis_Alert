@@ -1,20 +1,48 @@
 """
-PatientMonitorAgent — ReAct-pattern sepsis monitoring agent.
+PatientMonitorAgent — ReAct-pattern ICU sepsis monitoring agent.
 
-ReAct = Reason + Act loop.
-The agent doesn't just run a pipeline — it reasons about each patient's
-state, consults memory, and decides what action to take.
+Architecture: ReAct (Reason + Act, Yao et al. 2022).
+The agent does not run a fixed pipeline — it reasons about each patient's
+current state, risk trajectory, alert history, and suppression window before
+deciding what action (if any) to take. This stateful, context-aware loop is
+what distinguishes an agent from a batch scoring job.
 
-Escalation tiers:
-  Tier 0 — No alert (risk < threshold)
-  Tier 1 — Nurse alert (risk >= 0.4, SBAR narrative)
-  Tier 2 — Doctor alert (risk >= 0.6, detailed summary + suggested workup)
-  Tier 3 — Critical escalation (risk >= 0.8 OR rapid deterioration)
+Why the THINK step is deterministic (not LLM-driven):
+  The escalation decision — whether to page a nurse, doctor, or trigger a
+  critical alert — uses fully auditable, reproducible rule logic, not LLM
+  reasoning. EU MDR Class IIb and EU AI Act Annex III require that every
+  automated clinical decision be traceable and reproducible across identical
+  inputs. A non-deterministic LLM in the decision loop cannot satisfy this.
+  The LLM is confined to narrative generation — the one step where stylistic
+  variability is clinically acceptable.
 
-Per-patient memory:
-  - Alert history (timestamp, score, tier, acknowledged)
-  - Risk trajectory (is patient improving or deteriorating?)
-  - Time since last physician notification
+Escalation tier thresholds (clinically grounded):
+  Tier 0 — No alert  (risk < 0.40)
+    Below Sepsis-3 screening sensitivity; monitor without alerting.
+  Tier 1 — Nurse alert  (risk 0.40–0.59, OR risk 0.30–0.39 + rapid deterioration)
+    0.40 is the F2-optimal threshold (β=2, recall-weighted): at this cutoff the
+    model catches the majority of true sepsis cases at acceptable false-alarm rate.
+    Near-miss rule (0.30–0.39 + rapid rise) catches pre-threshold deterioration —
+    a common early-sepsis pattern where model scores lag clinical decline by one
+    observation cycle.
+  Tier 2 — Doctor alert  (risk 0.60–0.79)
+    PPV rises sufficiently at this threshold to justify direct physician involvement
+    without requiring nurse assessment as an intermediate step.
+  Tier 3 — Critical  (risk >= 0.80 OR rapid deterioration from Tier 2)
+    Scores >= 0.80 correlate with septic shock severity range in MIMIC-IV.
+    Requires explicit physician acknowledgement — the system cannot autonomously
+    escalate beyond alerting.
+
+Alert fatigue mitigation:
+  2-hour suppression window after each alert, overridden by rapid deterioration
+  (risk increase >= 0.20 in 3 consecutive observations). A patient who was stable
+  an hour ago but is now crashing warrants immediate re-alerting.
+
+Per-patient memory (PatientMemory):
+  - Risk history: last 48 scores (bounded to prevent unbounded growth)
+  - Alert history: full dispatch log for audit and acknowledgement tracking
+  - Suppression window: prevents alert fatigue on stable high-risk patients
+  - Physician notification timestamp: tracks escalation timeline for audit trail
 """
 
 from __future__ import annotations

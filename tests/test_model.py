@@ -1,4 +1,16 @@
-"""Tests for model loading and prediction."""
+"""
+Tests for model inference correctness (src/model/predict.py).
+
+These tests use mock models to isolate the inference logic from the trained
+artifact — they verify that predict_patient and predict_batch correctly:
+  - Apply the 4-tier risk label mapping (CRITICAL/HIGH/MODERATE/LOW)
+  - Handle missing features without raising errors (NaN fill via reindex)
+  - Return risk scores strictly within [0, 1]
+
+Clinical invariant enforced: the risk label boundaries (0.40 / 0.60 / 0.80)
+must be exact — the alert suppression and escalation logic in monitor_agent.py
+depends on these boundaries being consistent between inference and display.
+"""
 import pytest
 import numpy as np
 import pandas as pd

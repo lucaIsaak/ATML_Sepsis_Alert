@@ -1,13 +1,29 @@
 """
-Model evaluation and comparison against NEWS2 baseline.
+Model evaluation and comparison against the NEWS2 clinical baseline.
 
-Evaluates on a held-out test set (same 80/20 split used during training)
-so reported numbers reflect true out-of-sample performance.
+Evaluation design principles:
+  - Held-out test set (stratified 80/20, random_state=42 — same as train.py):
+    AUROC reported here is true out-of-sample; no hyperparameter selection
+    or calibration fitting ever touches the test set.
+  - NEWS2 comparison on the same test set: NEWS2 (National Early Warning Score 2)
+    is the current clinical standard in European ICUs (Royal College of Physicians,
+    2017). Comparing on identical patients gives a fair head-to-head delta.
+  - F2 threshold optimisation (β=2): precision-recall trade-off is asymmetric for
+    sepsis — a missed case (false negative) carries higher cost than a false alarm
+    (false positive). F2 encodes this by weighting recall twice as heavily as
+    precision, giving a principled, data-driven justification for the alert cutoff.
+  - Subgroup AUROC by gender, age quartile, and care unit: required for EU AI Act
+    Annex III compliance and essential for detecting demographic performance gaps
+    before clinical deployment. Goal: max subgroup AUROC gap < 0.05.
+  - Brier score: AUROC measures discrimination only. Brier score measures
+    calibration quality — whether a score of 0.6 truly reflects ~60% sepsis risk.
+    Both are required for clinical decision support (Van Calster et al., 2019).
 
-Generates:
-- AUROC, AUPRC on held-out test set
-- NEWS2 baseline comparison (same test set)
-- Sensitivity / specificity at clinical thresholds
+References:
+  Johnson et al. (2023) — MIMIC-IV sepsis prediction: AUROC 0.87
+  Moor et al. (2021) — Early sepsis detection: AUROC 0.85–0.89
+  Royal College of Physicians (2017) — NEWS2 specification
+  Van Calster et al. (2019) — Calibration: the Achilles heel of predictive analytics
 """
 
 from pathlib import Path

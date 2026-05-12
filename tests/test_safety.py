@@ -1,10 +1,29 @@
 """
-Tests for the AI safety guardrails module.
+Tests for the AI safety guardrails module (src/safety/guardrails.py).
 
-Covers all three protection layers:
-  - InputGuard  : OOD detection
-  - NarrativeGuard : prohibited-pattern detection and safe fallback
-  - AuditLogger    : append-only log write / read round-trip
+Clinical and regulatory motivation for each layer:
+
+  Layer 1 — InputGuard (OOD detection)
+    A GBDT silently extrapolates on out-of-distribution inputs — it produces
+    an authoritative-looking score with no signal of unreliability. In a clinical
+    setting, a score of 0.85 on a patient with a data entry error (e.g., SpO2 = 10%)
+    could trigger a CRITICAL alert for a healthy patient. These tests verify that
+    implausible or statistically extreme inputs are caught before they reach the
+    escalation logic.
+
+  Layer 2 — NarrativeGuard (LLM output validation)
+    EU MDR and clinical governance prohibit a decision support tool from issuing
+    confirmed diagnoses or definitive treatment orders — these are the exclusive
+    domain of the responsible clinician. These tests verify that any LLM output
+    containing such language is blocked and replaced with a guaranteed-safe
+    deterministic fallback before it reaches the bedside.
+
+  Layer 3 — AuditLogger (GDPR Art. 22 / EU AI Act Annex III compliance)
+    Every automated decision that may affect a patient must leave an audit trail
+    sufficient for post-hoc clinical review and right-to-explanation requests.
+    These tests verify that the log is append-only (no record is ever lost),
+    that each entry is valid JSON with all required fields, and that OOD and
+    narrative replacement flags are faithfully recorded.
 """
 
 import json
@@ -19,7 +38,15 @@ from src.safety.guardrails import (
 # ------------------------------------------------------------------ #
 
 class TestInputGuard:
-    """Tests for the out-of-distribution input detector (Layer 1)."""
+    """
+    Layer 1: Out-of-distribution input detector.
+
+    Clinical invariant: a patient with physiologically implausible values
+    (data entry errors, sensor malfunction) must never receive an
+    authoritative risk score. The guard degrades gracefully — CAUTION for
+    1–2 outliers, LOW_CONFIDENCE for ≥3 — rather than blocking the entire
+    prediction, which would deprive the clinician of any signal at all.
+    """
 
     def _guard(self, stats=None):
         """Return an InputGuard with optional training statistics."""
@@ -105,7 +132,17 @@ class TestInputGuard:
 # ------------------------------------------------------------------ #
 
 class TestNarrativeGuard:
-    """Tests for the LLM narrative validator (Layer 2)."""
+    """
+    Layer 2: LLM narrative validator.
+
+    Clinical invariant: the LLM must never produce a confirmed diagnosis
+    ("patient has sepsis") or a definitive treatment order ("start antibiotics").
+    These are the exclusive domain of the responsible clinician. When any
+    prohibited pattern is detected the entire narrative is replaced with a
+    deterministic SHAP-grounded fallback — partial replacement is not used
+    because a single unsafe sentence in an otherwise safe narrative is still
+    unsafe.
+    """
 
     def _guard(self):
         """Return a NarrativeGuard instance."""
@@ -174,7 +211,16 @@ class TestNarrativeGuard:
 # ------------------------------------------------------------------ #
 
 class TestAuditLogger:
-    """Tests for the append-only audit logger (Layer 3)."""
+    """
+    Layer 3: Append-only audit logger.
+
+    Regulatory invariant: GDPR Art. 22 requires that every automated decision
+    affecting a person be explainable on request. EU AI Act Annex III requires
+    high-risk AI systems to maintain a complete audit trail. These tests verify
+    that no record is ever lost (append-only), that every entry is valid
+    structured JSON, and that safety-relevant fields (OOD flag, narrative
+    replacement) are faithfully persisted for post-hoc clinical review.
+    """
 
     def _logger(self, tmp_path):
         """Create a logger writing to a temp path."""

@@ -1,15 +1,32 @@
 """
 Clinical prompt templates for the SepsisAlert narrative generator.
 
-The LLM output IS the product — it's what the nurse reads and acts on.
-Prompts are designed to be:
-  1. Grounded in SHAP output only (no hallucination risk)
-  2. Clinically structured (SBAR format)
-  3. Actionable within 30 seconds of reading
-  4. Appropriate to the audience (nurse vs doctor)
+The LLM output is the clinician-facing product — it is what the nurse reads
+and decides to act on within 30 seconds. Prompt design is therefore as
+clinically important as model accuracy.
+
+Design principles:
+  1. SHAP-grounded only: the prompt contains only values that came from
+     the model's input features. The LLM cannot introduce information not
+     present in the SHAP summary — hallucinated values are structurally blocked
+     by the NarrativeGuard layer downstream.
+  2. SBAR format: Situation / Background / Assessment / Recommendation is the
+     standard clinical handover structure mandated in European ICUs (Joint
+     Commission International, WHO Collaborating Centre 2007). Using it means
+     clinicians already know where to look for each piece of information.
+  3. Audience-stratified: nurse prompts use plain language and immediate actions;
+     doctor prompts reference Sepsis-3 criteria (qSOFA, SOFA components) and
+     suggest evidence-based workup. A single generic prompt performs poorly
+     for both audiences.
+  4. Hard length cap (5 sentences): alert fatigue research shows that longer
+     alerts are read less carefully. Forcing brevity also prevents the LLM
+     from padding with generic sepsis facts not grounded in the patient's data.
+  5. Explicit non-diagnosis framing: "sepsis risk" / "possible sepsis" — never
+     "patient has sepsis". This is both clinically accurate (the model detects
+     a risk pattern, not a confirmed diagnosis) and legally required under EU MDR.
 
 SBAR = Situation, Background, Assessment, Recommendation
-       — the standard clinical handover format used in ICUs globally
+       — WHO-endorsed clinical communication standard
 """
 
 # ------------------------------------------------------------------ #

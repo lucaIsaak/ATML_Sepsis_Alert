@@ -1,8 +1,28 @@
 """
 SHAP explainability for the sepsis model.
 
-Uses shap.Explainer (auto-selects best method for HistGradientBoosting).
-Returns top N feature contributions per patient for the narrative layer.
+Clinical and regulatory motivation:
+  EU AI Act Annex III classifies clinical decision support as high-risk AI.
+  Article 13 requires that high-risk systems be sufficiently transparent that
+  users can interpret the system's output and act on it appropriately.
+  SHAP (SHapley Additive exPlanations, Lundberg & Lee 2017) satisfies this
+  by providing a locally faithful, additive decomposition of each prediction —
+  the clinician sees exactly which lab values and vitals drove this patient's
+  score, not a global feature ranking that may not apply to the individual.
+
+Implementation choice — TreeExplainer over KernelExplainer:
+  KernelExplainer is model-agnostic but O(2^d) in the number of features.
+  TreeExplainer exploits the tree structure directly: O(TLD²) where T = trees,
+  L = leaves, D = depth. For a 55-feature HistGBM this is ~100× faster and
+  produces exact (not approximate) SHAP values.
+
+CalibratedClassifierCV unwrapping:
+  SHAP must run on the raw HistGBM, not the isotonic calibration wrapper.
+  The calibration layer is a monotone mapping on the output — it does not
+  change which features drive the decision, only the score magnitude.
+  Running SHAP on the calibrated model would attribute output variance to the
+  calibration mapping rather than the tree splits, producing misleading
+  feature importances.
 """
 
 from dataclasses import dataclass
