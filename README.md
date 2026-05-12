@@ -7,7 +7,14 @@
 
 ## Quick Start
 
-**Prerequisites:** Python 3.10+, Node.js 18+
+**Prerequisites:** Python 3.10+, Node.js 18+, ffmpeg (for audio transcription)
+
+```bash
+# macOS
+brew install ffmpeg
+# Ubuntu/Debian
+sudo apt install ffmpeg
+```
 
 ```bash
 # Clone and install Python dependencies
@@ -138,6 +145,11 @@ See `MODEL_CARD.md` for full safety documentation.
 ## Data Privacy & GDPR
 
 ### Pseudonymization architecture
+
+> **Demo note:** The demo runs on fully synthetic data with no real patient IDs.
+> Pseudonymization is implemented by the **hospital** (data controller) before any data
+> reaches this system — it is an architectural contract, not code in this repository.
+> The integration point is the FHIR adapter (`src/integrations/fhir_adapter.py`).
 
 SepsisAlert never receives, stores, or displays real patient identifiers. The hospital pseudonymizes all patient IDs **before** any data reaches the system:
 
@@ -529,6 +541,20 @@ pytest tests/ -v
 ```
 
 Covers: model inference, clinical schema validation, SBAR prompt structure, LLM client fallback, and all three safety guardrail layers (22 tests total).
+
+---
+
+## Security notes (prototype)
+
+This is a research prototype. The following are **not** implemented and must be added before any clinical deployment:
+
+| Missing | Required for production |
+|---|---|
+| Authentication | All API endpoints are open — add OAuth2 / API key middleware |
+| HTTPS | Run behind a TLS-terminating reverse proxy (nginx, Caddy) |
+| Rate limiting | Add to `/api/retrain` and `/api/narrative/stream` at minimum |
+| Audit log integrity | Current append-only JSONL has no tamper-evidence — use a write-once store |
+| Pseudonymization | Implemented by the hospital before data reaches this system (see GDPR section) |
 
 ---
 

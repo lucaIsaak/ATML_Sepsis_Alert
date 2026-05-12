@@ -1,6 +1,12 @@
 """
 HL7 FHIR R4 Adapter — Epic / Oracle Health (Cerner) compatibility.
 
+PRODUCTION STUB — not active in the demo.
+This adapter is ready to connect to a hospital EHR once OAuth credentials
+and a FHIR endpoint URL are provided by the hospital partner.
+No changes to the rest of the codebase are required — plug in the base_url
+and bearer token and call get_patient_features() from the monitoring loop.
+
 Both Epic and Oracle Health expose patient data via HL7 FHIR R4 APIs.
 This adapter translates FHIR Observation resources into the feature
 format SepsisAlert's model expects.

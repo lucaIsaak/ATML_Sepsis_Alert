@@ -172,6 +172,10 @@ async def stream_narrative(body: StreamRequest, request: Request):
     )
 
     def _generate():
+        # Open the HTTP stream immediately so the frontend shows a loading state
+        # rather than waiting 20-30 s for the first byte from Ollama.
+        yield ""
+
         # 1. Collect full agent output (required for NarrativeGuard validation)
         chunks = list(agent.stream_generate(
             explanation,

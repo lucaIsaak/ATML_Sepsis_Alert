@@ -225,6 +225,12 @@ function FeedbackAgentCard() {
                         </p>
                       </>
                     )}
+                    <p className="text-xs text-muted-foreground mt-1 italic">
+                      Note: at demo scale (&lt;50 feedback labels) AUROC change after retraining is
+                      expected to be near-zero — this is correct behaviour, not a bug.
+                      The feedback labels are incorporated and weighted; the effect becomes
+                      visible at production scale.
+                    </p>
                   </div>
                   <button
                     onClick={handleRetrain}

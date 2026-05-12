@@ -36,9 +36,14 @@ export function LiveMonitor() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">ICU Live Monitor</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-2xl font-bold tracking-tight">ICU Live Monitor</h1>
+          <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200">
+            Demo mode · static snapshot
+          </span>
+        </div>
         <p className="text-muted-foreground text-sm mt-1">
-          Real-time sepsis risk assessment for sampled ICU patients
+          Sepsis risk assessment for sampled ICU patients — updates hourly in production with live hospital feeds
         </p>
       </div>
 

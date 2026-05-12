@@ -21,6 +21,7 @@ router = APIRouter()
 _shap_cache:        dict[int, list[dict]] = {}
 _ood_cache:         dict[int, dict] = {}   # stay_id → {flag, outlier_features, ...}
 _uncertainty_cache: dict[int, dict] = {}   # stay_id → uncertainty dict
+_cache_lock       = threading.Lock()       # guards all three caches + lazy singletons
 _explainer        = None   # lazily initialised on first SHAP request
 _explainer_lock   = threading.Lock()
 _input_guard      = None   # lazily initialised on first OOD request
@@ -108,66 +109,61 @@ async def get_patient(stay_id: int, request: Request) -> dict:
     feature_vector = feat_row.iloc[0][feature_cols].values.astype(float)
 
     # ── OOD / InputGuard check ────────────────────────────────────────
-    if stay_id not in _ood_cache:
-        guard      = _get_input_guard(artifact)
-        feature_dict = feat_row.iloc[0].to_dict()
-        ood_result = guard.check(feature_dict)
-        _ood_cache[stay_id] = {
-            "ood_flag":            ood_result.confidence_flag,
-            "outlier_features":    ood_result.outlier_features,
-            "mahalanobis_distance": ood_result.mahalanobis_distance,
-            "multivariate_novel":  ood_result.multivariate_novel,
-        }
-
-    ood_info = _ood_cache.get(stay_id, {
-        "ood_flag": "NORMAL",
-        "outlier_features": [],
-        "mahalanobis_distance": None,
-        "multivariate_novel": False,
-    })
+    with _cache_lock:
+        if stay_id not in _ood_cache:
+            guard        = _get_input_guard(artifact)
+            feature_dict = feat_row.iloc[0].to_dict()
+            ood_result   = guard.check(feature_dict)
+            _ood_cache[stay_id] = {
+                "ood_flag":             ood_result.confidence_flag,
+                "outlier_features":     ood_result.outlier_features,
+                "mahalanobis_distance": ood_result.mahalanobis_distance,
+                "multivariate_novel":   ood_result.multivariate_novel,
+            }
+        ood_info = _ood_cache[stay_id]
 
     # ── Epistemic uncertainty (MC perturbation) ───────────────────────
-    if stay_id not in _uncertainty_cache:
-        try:
-            from src.model.uncertainty import estimate_uncertainty  # noqa: PLC0415
-            _uncertainty_cache[stay_id] = estimate_uncertainty(
-                model=artifact["model"],
-                feature_vector=feature_vector,
-                feature_names=list(feature_cols),
-                training_stats=artifact.get("training_stats", {}),
-            )
-        except Exception as _exc:  # pylint: disable=broad-except
-            _uncertainty_cache[stay_id] = {
-                "uncertainty_flag": "LOW",
-                "is_uncertain": False,
-                "ci_lower": None,
-                "ci_upper": None,
-                "ci_width": None,
-                "variance": None,
-                "std": None,
-                "point_estimate": risk_score,
-                "n_samples": 0,
-                "error": str(_exc),
-            }
-
-    epistemic = _uncertainty_cache[stay_id]
+    with _cache_lock:
+        if stay_id not in _uncertainty_cache:
+            try:
+                from src.model.uncertainty import estimate_uncertainty  # noqa: PLC0415
+                _uncertainty_cache[stay_id] = estimate_uncertainty(
+                    model=artifact["model"],
+                    feature_vector=feature_vector,
+                    feature_names=list(feature_cols),
+                    training_stats=artifact.get("training_stats", {}),
+                )
+            except Exception as _exc:  # pylint: disable=broad-except
+                _uncertainty_cache[stay_id] = {
+                    "uncertainty_flag": "LOW",
+                    "is_uncertain": False,
+                    "ci_lower": None,
+                    "ci_upper": None,
+                    "ci_width": None,
+                    "variance": None,
+                    "std": None,
+                    "point_estimate": risk_score,
+                    "n_samples": 0,
+                    "error": str(_exc),
+                }
+        epistemic = _uncertainty_cache[stay_id]
 
     # ── SHAP computation ──────────────────────────────────────────────
-    if stay_id not in _shap_cache:
-        from src.explainability.shap_explainer import explain_patient  # noqa: PLC0415
+    with _cache_lock:
+        if stay_id not in _shap_cache:
+            from src.explainability.shap_explainer import explain_patient  # noqa: PLC0415
 
-        explainer = _get_explainer(artifact, features_df)
-        explanation = explain_patient(
-            explainer=explainer,
-            feature_vector=feature_vector,
-            feature_names=list(feature_cols),
-            risk_score=risk_score,
-            stay_id=str(stay_id),
-            top_n=len(feature_cols),
-        )
-        _shap_cache[stay_id] = explanation.top_features
-
-    all_features = _shap_cache[stay_id]
+            explainer = _get_explainer(artifact, features_df)
+            explanation = explain_patient(
+                explainer=explainer,
+                feature_vector=feature_vector,
+                feature_names=list(feature_cols),
+                risk_score=risk_score,
+                stay_id=str(stay_id),
+                top_n=len(feature_cols),
+            )
+            _shap_cache[stay_id] = explanation.top_features
+        all_features = _shap_cache[stay_id]
 
     # top = highest |shap|, bottom = lowest |shap|
     sorted_desc = sorted(all_features, key=lambda f: abs(f["shap"]), reverse=True)
