@@ -54,7 +54,6 @@ _FEATURE_LABELS: dict[str, str] = {
     "bilirubin_last":    "Bilirubin",
     "platelets_last":    "Platelets",
     "bicarbonate_last":  "Bicarbonate",
-    "chloride_last":     "Chloride",
     "glucose_last":      "Glucose",
 }
 
@@ -62,7 +61,7 @@ _FEATURE_LABELS: dict[str, str] = {
 _PRIORITY_FEATURES = [
     "map_last", "map_mean", "heart_rate_last", "spo2_min", "resp_rate_last",
     "lactate_last", "creatinine_last", "wbc_last", "temperature_f_last",
-    "bilirubin_last", "platelets_last", "bicarbonate_last", "chloride_last", "glucose_last",
+    "bilirubin_last", "platelets_last", "bicarbonate_last", "glucose_last",
 ]
 
 

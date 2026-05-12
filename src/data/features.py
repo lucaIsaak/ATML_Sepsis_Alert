@@ -20,7 +20,6 @@ Labs from labevents (MIMIC-IV item IDs):
     50885 Bilirubin, Total
     51265 Platelet Count
     50882 Bicarbonate
-    50902 Chloride
     50931 Glucose
 """
 

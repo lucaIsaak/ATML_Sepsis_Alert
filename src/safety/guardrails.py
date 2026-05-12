@@ -88,7 +88,6 @@ _HARD_BOUNDS: dict[str, tuple[float, float]] = {
     "bilirubin_last":     (0.0,   40.0),
     "platelets_last":     (1.0,   1500.0),
     "bicarbonate_last":   (2.0,   50.0),
-    "chloride_last":      (60.0,  140.0),
     "glucose_last":       (10.0,  900.0),
     "age":                (18.0,  115.0),
 }
