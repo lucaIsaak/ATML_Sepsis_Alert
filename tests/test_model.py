@@ -22,11 +22,12 @@ class TestPredictPatient:
     def test_high_risk_label_above_06(self):
         from src.model.predict import predict_patient
         mock_model = MagicMock()
+        # 0.95 > 0.8 → CRITICAL tier (not HIGH)
         mock_model.predict_proba.return_value = np.array([[0.05, 0.95]])
         artifact = {"model": mock_model, "feature_cols": ["feat_a"]}
 
         result = predict_patient({"feat_a": 5.0}, artifact)
-        assert result["risk_label"] == "HIGH"
+        assert result["risk_label"] == "CRITICAL"
 
     def test_low_risk_label_below_04(self):
         from src.model.predict import predict_patient

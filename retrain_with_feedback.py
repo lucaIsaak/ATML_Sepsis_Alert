@@ -91,6 +91,7 @@ import joblib
 import numpy as np
 import pandas as pd
 import yaml
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.metrics import classification_report, roc_auc_score
 from sklearn.model_selection import train_test_split
@@ -230,11 +231,18 @@ def train_new_model(
     x_val_idx   : index of validation rows (for weight-aware reporting)
     y_val       : validation labels
     """
-    x_train, x_val, y_train, y_val, w_train, _ = train_test_split(
+    # 3-way split matching train.py: 72% train / 8% calibration / 20% test
+    x_trainval, x_val, y_trainval, y_val, w_trainval, _ = train_test_split(
         X, y, weights,
         test_size=0.2,
         random_state=42,
         stratify=y,
+    )
+    x_train, x_cal, y_train, y_cal, w_train, _ = train_test_split(
+        x_trainval, y_trainval, w_trainval,
+        test_size=0.1,
+        random_state=42,
+        stratify=y_trainval,
     )
 
     model_cfg = cfg["model"]
@@ -248,16 +256,19 @@ def train_new_model(
         early_stopping    = True,
         validation_fraction = 0.1,
         n_iter_no_change  = 50,
-        verbose           = 0,          # quiet — we print our own summary
+        verbose           = 0,
     )
 
     print("\n  Training new model…")
     model.fit(x_train, y_train, sample_weight=w_train)
 
-    val_proba = model.predict_proba(x_val)[:, 1]
+    calibrated = CalibratedClassifierCV(model, method="isotonic", cv="prefit")
+    calibrated.fit(x_cal, y_cal)
+
+    val_proba = calibrated.predict_proba(x_val)[:, 1]
     val_auroc = float(roc_auc_score(y_val, val_proba))
 
-    print(f"  New model validation AUROC : {val_auroc:.4f}")
+    print(f"  New model validation AUROC (calibrated) : {val_auroc:.4f}")
     print()
     print(classification_report(
         y_val,
@@ -266,7 +277,7 @@ def train_new_model(
         digits=3,
     ))
 
-    return model, val_auroc, x_val.index, y_val
+    return calibrated, model, val_auroc, x_val.index, y_val, x_train
 
 
 def evaluate_old_model(
@@ -303,7 +314,9 @@ def main(dry_run: bool = False, force: bool = False) -> None:
 
     # ── Step 2: Train ──────────────────────────────────────────
     _section("Step 2 / 3  —  Train New Model")
-    new_model, new_auroc, x_val_idx, y_val = train_new_model(X, y, weights, cfg)
+    new_model, base_model, new_auroc, x_val_idx, y_val, x_train = train_new_model(
+        X, y, weights, cfg
+    )
 
     # ── Step 3: Compare & save ─────────────────────────────────
     _section("Step 3 / 3  —  Compare & Save")
@@ -323,15 +336,31 @@ def main(dry_run: bool = False, force: bool = False) -> None:
     should_save = force or (delta >= 0)
 
     if should_save:
-        # Back up old model first
         if ARTIFACT_PATH.exists():
             backup = _backup_model(ARTIFACT_PATH)
             print(f"\n  Old model backed up → {backup}")
 
+        # Compute training stats from x_train for OOD detection in the new artifact.
+        training_stats = {
+            col: {"mean": float(x_train[col].mean()), "std": float(x_train[col].std())}
+            for col in feature_cols
+        }
+        feat_matrix = x_train.fillna(x_train.mean()).values.astype(float)
+        training_mean = feat_matrix.mean(axis=0)
+        try:
+            cov = np.cov(feat_matrix, rowvar=False)
+            training_cov_inv = np.linalg.pinv(cov)
+        except Exception:  # pylint: disable=broad-except
+            training_cov_inv = None
+
         artifact = {
-            "model":        new_model,
-            "feature_cols": feature_cols,
-            "auroc":        new_auroc,
+            "model":            new_model,    # calibrated — use for predict_proba
+            "base_model":       base_model,   # raw HistGBM — use for SHAP
+            "feature_cols":     feature_cols,
+            "auroc":            new_auroc,
+            "training_stats":   training_stats,
+            "training_mean":    training_mean,
+            "training_cov_inv": training_cov_inv,
         }
         ARTIFACT_PATH.parent.mkdir(parents=True, exist_ok=True)
         joblib.dump(artifact, ARTIFACT_PATH)

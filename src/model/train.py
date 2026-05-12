@@ -14,6 +14,7 @@ import joblib
 import numpy as np
 import pandas as pd
 import yaml
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.metrics import classification_report, roc_auc_score
 from sklearn.model_selection import train_test_split
@@ -47,8 +48,14 @@ def train(cfg: dict | None = None) -> HistGradientBoostingClassifier:
           f"Sepsis prevalence: {y.mean():.1%} | "
           f"Features: {len(feature_cols)}")
 
-    x_train, x_val, y_train, y_val = train_test_split(
+    # 3-way split: 72% train / 8% calibration / 20% test
+    # The 20% test set (random_state=42, test_size=0.2) matches evaluate.py exactly.
+    # Calibration is fitted on held-out data the model never saw — no data leakage.
+    x_trainval, x_test, y_trainval, y_test = train_test_split(
         features, y, test_size=0.2, random_state=42, stratify=y
+    )
+    x_train, x_cal, y_train, y_cal = train_test_split(
+        x_trainval, y_trainval, test_size=0.1, random_state=42, stratify=y_trainval
     )
 
     model_cfg = cfg["model"]
@@ -69,36 +76,41 @@ def train(cfg: dict | None = None) -> HistGradientBoostingClassifier:
 
     model.fit(x_train, y_train)
 
-    val_proba = model.predict_proba(x_val)[:, 1]
-    auroc = roc_auc_score(y_val, val_proba)
-    print(f"\nValidation AUROC: {auroc:.4f}")
+    # Isotonic calibration on the held-out calibration split.
+    # Makes risk scores empirically meaningful: 0.6 ≈ 60% actual sepsis rate.
+    calibrated = CalibratedClassifierCV(model, method="isotonic", cv="prefit")
+    calibrated.fit(x_cal, y_cal)
+
+    val_proba = calibrated.predict_proba(x_test)[:, 1]
+    auroc = roc_auc_score(y_test, val_proba)
+    print(f"\nValidation AUROC (calibrated): {auroc:.4f}")
 
     print(classification_report(
-        y_val, (val_proba >= 0.4).astype(int), target_names=["No Sepsis", "Sepsis"]
+        y_test, (val_proba >= 0.4).astype(int), target_names=["No Sepsis", "Sepsis"]
     ))
 
-    # Compute per-feature training statistics for InputGuard z-score checks
-    # and epistemic uncertainty perturbation scaling.
+    # Training statistics computed from x_train only (the model's actual training data).
     training_stats = {
         col: {"mean": float(x_train[col].mean()), "std": float(x_train[col].std())}
         for col in feature_cols
     }
 
-    # Compute training centroid and inverse covariance for Mahalanobis OOD check.
+    # Covariance for Mahalanobis OOD check — from x_train only.
     feat_matrix = x_train.fillna(x_train.mean()).values.astype(float)
     training_mean = feat_matrix.mean(axis=0)
     try:
         cov = np.cov(feat_matrix, rowvar=False)
-        training_cov_inv = np.linalg.pinv(cov)   # pseudo-inverse — handles correlated features
+        training_cov_inv = np.linalg.pinv(cov)
     except Exception:  # pylint: disable=broad-except
         training_cov_inv = None
 
-    # Save
+    # Save both calibrated model (for inference) and raw base model (for SHAP).
     artifact_path = Path(model_cfg["artifact_path"])
     artifact_path.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(
         {
-            "model":             model,
+            "model":             calibrated,   # calibrated — use for predict_proba
+            "base_model":        model,         # raw HistGBM — use for SHAP
             "feature_cols":      feature_cols,
             "auroc":             auroc,
             "training_stats":    training_stats,

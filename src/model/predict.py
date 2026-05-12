@@ -49,8 +49,8 @@ def predict_patient(features: dict, artifact: dict | None = None) -> dict:
     model = artifact["model"]
     feature_cols = artifact["feature_cols"]
 
-    # Align to expected feature order, fill missing with NaN
-    feat_df = pd.DataFrame([features])[feature_cols]
+    # Align to expected feature order; missing features become NaN (model handles them)
+    feat_df = pd.DataFrame([features]).reindex(columns=feature_cols)
     risk_score = float(model.predict_proba(feat_df)[0, 1])
 
     if risk_score >= 0.8:

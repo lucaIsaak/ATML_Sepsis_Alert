@@ -117,7 +117,17 @@ def build_explainer(model, x_background=None) -> shap.TreeExplainer:
 
     x_background is accepted for API compatibility but TreeExplainer does not
     require a background dataset — it uses the model's own tree structure.
+
+    If model is a CalibratedClassifierCV, the underlying base estimator is used
+    so that SHAP values reflect the tree's actual decision logic, not the
+    isotonic calibration mapping.
     """
+    try:
+        from sklearn.calibration import CalibratedClassifierCV  # noqa: PLC0415
+        if isinstance(model, CalibratedClassifierCV):
+            model = model.estimator
+    except ImportError:
+        pass
     return shap.TreeExplainer(model)
 
 

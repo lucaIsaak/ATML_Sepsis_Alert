@@ -18,6 +18,7 @@ import yaml
 from sklearn.metrics import (
     average_precision_score,
     brier_score_loss,
+    fbeta_score,
     roc_auc_score,
 )
 from sklearn.model_selection import train_test_split
@@ -131,6 +132,31 @@ def _threshold_metrics(y_true: np.ndarray, y_score: np.ndarray, threshold: float
     }
 
 
+def _optimal_threshold(y_true: np.ndarray, y_score: np.ndarray, beta: float = 2.0) -> dict:
+    """
+    Find the decision threshold that maximises F-beta score.
+
+    beta=2 weights recall twice as heavily as precision — the correct clinical
+    trade-off for sepsis: a missed case (false negative) is more harmful than
+    an unnecessary alert (false positive).
+
+    Returns the optimal threshold and the F2 score achieved at that threshold,
+    providing a principled justification for the chosen alert cutoff.
+    """
+    thresholds = np.arange(0.05, 0.95, 0.01)
+    best_thresh, best_f = 0.5, 0.0
+    for t in thresholds:
+        y_pred = (y_score >= t).astype(int)
+        f = float(fbeta_score(y_true, y_pred, beta=beta, zero_division=0))
+        if f > best_f:
+            best_f = f
+            best_thresh = float(t)
+    return {
+        "optimal_threshold_f2": round(best_thresh, 2),
+        "f2_score_at_optimal":  round(best_f, 4),
+    }
+
+
 def _subgroup_auroc(df_test: "pd.DataFrame", y_score: np.ndarray) -> dict:
     """
     Compute AUROC per demographic subgroup for fairness analysis.
@@ -173,6 +199,20 @@ def _subgroup_auroc(df_test: "pd.DataFrame", y_score: np.ndarray) -> dict:
                         df_test["sepsis_label"].values[mask], y_score[mask]
                     )
                     subgroup_metrics[f"auroc_age_{label}"] = round(float(sub_auroc), 4)
+                except ValueError:
+                    pass
+
+    # Care unit subgroup — most operationally relevant for an ICU tool
+    if "first_careunit" in df_test.columns:
+        for unit in df_test["first_careunit"].dropna().unique():
+            mask = df_test["first_careunit"].values == unit
+            if mask.sum() >= 20:
+                try:
+                    sub_auroc = roc_auc_score(
+                        df_test["sepsis_label"].values[mask], y_score[mask]
+                    )
+                    safe_key = str(unit).replace(" ", "_").replace("/", "_")[:20]
+                    subgroup_metrics[f"auroc_unit_{safe_key}"] = round(float(sub_auroc), 4)
                 except ValueError:
                     pass
 
@@ -220,6 +260,9 @@ def evaluate(cfg: dict | None = None) -> dict:
     # Fairness — subgroup AUROC
     subgroup = _subgroup_auroc(df_test, y_score)
 
+    # Optimal threshold via F2 score sweep (recall-weighted — missed sepsis > false alarm)
+    f2_result = _optimal_threshold(y_true, y_score, beta=2.0)
+
     metrics = {
         "auroc": auroc,
         "auprc": auprc,
@@ -230,6 +273,7 @@ def evaluate(cfg: dict | None = None) -> dict:
         "threshold_0.4": thresh_04,
         "threshold_0.6": thresh_06,
         "threshold_0.8": thresh_08,
+        **f2_result,
         **subgroup,
     }
 
@@ -240,6 +284,10 @@ def evaluate(cfg: dict | None = None) -> dict:
     print(f"Brier Score:        {brier:.4f}  (lower = better calibration)")
     print(f"NEWS2 AUROC:        {news2_auroc:.4f}")
     print(f"Gap vs NEWS2:       +{auroc - news2_auroc:.4f}")
+    print(f"\nOptimal threshold (F2, beta=2 — recall-weighted for sepsis):")
+    print(f"  Threshold: {f2_result['optimal_threshold_f2']:.2f}  "
+          f"F2: {f2_result['f2_score_at_optimal']:.4f}")
+    print("  (Current nurse alert threshold 0.40 should be close to this value)")
     print("\nAt threshold 0.4 (nurse alert):")
     print(f"  Sensitivity: {thresh_04['sensitivity']:.3f}  "
           f"Specificity: {thresh_04['specificity']:.3f}  "

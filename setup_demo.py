@@ -42,7 +42,10 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import train_test_split
 
 # ------------------------------------------------------------------ #
 # Config                                                               #
@@ -156,8 +159,16 @@ def train_demo_model(features: pd.DataFrame) -> dict:
     meta_cols = {"stay_id", "hadm_id", "sepsis_label"}
     feature_cols = [c for c in features.columns if c not in meta_cols]
 
-    x_train = features[feature_cols]
-    y_train = features["sepsis_label"]
+    X = features[feature_cols]
+    y = features["sepsis_label"]
+
+    # 3-way split: 72% train / 8% calibration / 20% test — matches train.py
+    x_trainval, x_test, y_trainval, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y
+    )
+    x_train, x_cal, y_train, y_cal = train_test_split(
+        x_trainval, y_trainval, test_size=0.1, random_state=42, stratify=y_trainval
+    )
 
     model = HistGradientBoostingClassifier(
         max_leaf_nodes=31,
@@ -168,13 +179,34 @@ def train_demo_model(features: pd.DataFrame) -> dict:
     )
     model.fit(x_train, y_train)
 
-    # Quick AUROC estimate
-    from sklearn.metrics import roc_auc_score  # pylint: disable=import-outside-toplevel
-    proba = model.predict_proba(x_train)[:, 1]
-    auroc = float(roc_auc_score(y_train, proba))
-    print(f"  Demo model training AUROC (train set): {auroc:.3f}")
+    calibrated = CalibratedClassifierCV(model, method="isotonic", cv="prefit")
+    calibrated.fit(x_cal, y_cal)
 
-    return {"model": model, "feature_cols": feature_cols, "auroc": auroc}
+    proba = calibrated.predict_proba(x_test)[:, 1]
+    auroc = float(roc_auc_score(y_test, proba))
+    print(f"  Demo model test AUROC (calibrated): {auroc:.3f}")
+
+    training_stats = {
+        col: {"mean": float(x_train[col].mean()), "std": float(x_train[col].std())}
+        for col in feature_cols
+    }
+    feat_matrix = x_train.fillna(x_train.mean()).values.astype(float)
+    training_mean = feat_matrix.mean(axis=0)
+    try:
+        cov = np.cov(feat_matrix, rowvar=False)
+        training_cov_inv = np.linalg.pinv(cov)
+    except Exception:  # pylint: disable=broad-except
+        training_cov_inv = None
+
+    return {
+        "model":            calibrated,
+        "base_model":       model,
+        "feature_cols":     feature_cols,
+        "auroc":            auroc,
+        "training_stats":   training_stats,
+        "training_mean":    training_mean,
+        "training_cov_inv": training_cov_inv,
+    }
 
 
 def write_local(cohort: pd.DataFrame, features: pd.DataFrame, artifact: dict) -> None:
