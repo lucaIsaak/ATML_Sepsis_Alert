@@ -136,7 +136,7 @@ export function NarrativePanel({ stayId, patientDetail }: NarrativePanelProps) {
             <p className="text-xs text-amber-700">
               Install Ollama from <span className="font-mono">ollama.com</span>, then run{' '}
               <span className="font-mono bg-amber-100 px-1 rounded">ollama serve</span> and pull a model with{' '}
-              <span className="font-mono bg-amber-100 px-1 rounded">ollama pull llama3.2</span>.
+              <span className="font-mono bg-amber-100 px-1 rounded">ollama pull mistral:7b</span>.
               All other dashboard features work without it.
             </p>
           </div>

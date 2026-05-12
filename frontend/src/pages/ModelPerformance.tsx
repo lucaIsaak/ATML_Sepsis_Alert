@@ -549,7 +549,7 @@ export function ModelPerformance() {
         <MetricCard
           title="SepsisAlert AUROC"
           value={modelInfo ? `${modelInfo.auroc.toFixed(4)}` : stats.auroc.toFixed(3)}
-          description={modelInfo ? `95% CI ${modelInfo.auroc_ci_95[0]}–${modelInfo.auroc_ci_95[1]} · held-out test set` : `+${((stats.auroc - stats.news2_auroc) * 100).toFixed(1)}pp vs NEWS2`}
+          description={modelInfo?.auroc_ci_95 ? `95% CI ${modelInfo.auroc_ci_95[0]}–${modelInfo.auroc_ci_95[1]} · held-out test set` : `+${((stats.auroc - stats.news2_auroc) * 100).toFixed(1)}pp vs NEWS2`}
           valueClassName="text-primary"
         />
         <MetricCard

@@ -52,6 +52,8 @@ cd frontend && npm install && npm run dev
 
 Open [http://localhost:5173](http://localhost:5173) — the dashboard is live.
 
+`setup_demo.py` generates **5,000 fully synthetic ICU patients** (no real patient data) and reuses a real trained model if `models/sepsis_model.pkl` is present, otherwise trains a demo model on synthetic data (~30 s). The demo prevalence is higher than MIMIC-IV (22% vs 10.6%) to ensure all risk tiers are visible in the dashboard. Voice correction notes are transcribed locally by Whisper — no audio or text is sent to any external service.
+
 > **Narratives require Ollama** (optional — everything else works without it).
 > Install from [ollama.com](https://ollama.com), then in a separate terminal:
 > ```bash
@@ -400,7 +402,8 @@ ATML_Sepsis_Alert/
 │   │   ├── patient_buffer.py       # Streaming per-patient rolling buffer
 │   │   └── streaming.py            # MIMIC stream simulator (FHIR-compatible)
 │   ├── model/
-│   │   ├── train.py                # Model training (HistGradientBoosting)
+│   │   ├── calibration.py          # IsotonicCalibrated wrapper (stable pickle path)
+│   │   ├── train.py                # Model training (HistGradientBoosting + isotonic calibration)
 │   │   ├── tune.py                 # Optuna hyperparameter search
 │   │   ├── evaluate.py             # AUROC, Brier, clinical thresholds, subgroup fairness
 │   │   └── predict.py              # Single-patient and batch inference
@@ -522,27 +525,6 @@ The FHIR R4 adapter (Epic / Oracle Cerner) maps to hospital-specific item IDs an
 
 ---
 
-## Quick Start (no MIMIC-IV required)
-
-```bash
-git clone <repo>
-cd ATML_Sepsis_Alert
-pip install -r requirements.txt
-
-# Generate synthetic demo data + reuse real model if present, else train demo (~10s)
-python setup_demo.py
-
-# Terminal 1 — FastAPI backend
-uvicorn src.api.main:app --reload --port 8000
-# Terminal 2 — React frontend
-cd frontend && npm install && npm run dev
-# Open http://localhost:5173
-```
-
-`setup_demo.py` generates **5,000 fully synthetic ICU patients** (22% synthetic sepsis prevalence — real MIMIC-IV cohort is 10.6%, no real patient data) and reuses a real trained model if `models/sepsis_model.pkl` exists, otherwise trains a demo model on synthetic data. Voice correction notes are transcribed locally by Whisper and stored in `logs/narrative_feedback.jsonl` alongside SHAP vectors — no audio or text is sent to any external service.
-
----
-
 ## Full Pipeline (with MIMIC-IV access)
 
 ```bash
@@ -575,7 +557,7 @@ uvicorn src.api.main:app --reload --port 8000
 pytest tests/ -v
 ```
 
-Covers: model inference, clinical schema validation, SBAR prompt structure, LLM client fallback, and all three safety guardrail layers (22 tests total).
+Covers: model inference, OOD uncertainty detection, clinical schema validation, SBAR prompt structure, LLM client fallback, and all three safety guardrail layers (103 tests total).
 
 ---
 
