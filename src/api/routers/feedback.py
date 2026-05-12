@@ -82,7 +82,14 @@ async def save_narrative_fb(body: NarrativeFeedbackRequest, request: Request):
         predictions = request.app.state.predictions
         row_df = predictions[predictions["stay_id"] == body.stay_id]
         risk_score = float(row_df.iloc[0]["risk_score"]) if not row_df.empty else 0.0
-        risk_label = "HIGH" if risk_score >= 0.6 else "MODERATE" if risk_score >= 0.4 else "LOW"
+        if risk_score >= 0.8:
+            risk_label = "CRITICAL"
+        elif risk_score >= 0.6:
+            risk_label = "HIGH"
+        elif risk_score >= 0.4:
+            risk_label = "MODERATE"
+        else:
+            risk_label = "LOW"
 
         explanation = SHAPExplanation(
             stay_id=str(body.stay_id),
