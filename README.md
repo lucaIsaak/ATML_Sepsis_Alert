@@ -7,6 +7,15 @@
 
 ## Quick Start
 
+**Prerequisites:** Python 3.10+, Node.js 18+
+
+```bash
+# Clone and install Python dependencies
+git clone https://github.com/lucaIsaak/ATML_Sepsis_Alert.git
+cd ATML_Sepsis_Alert
+pip install -r requirements.txt
+```
+
 ```bash
 # 1. Generate synthetic demo data and train the demo model (~30 s)
 python setup_demo.py
@@ -20,12 +29,12 @@ cd frontend && npm install && npm run dev
 
 Open [http://localhost:5173](http://localhost:5173) — the dashboard is live.
 
-> **Narratives require Ollama.** Install from [ollama.com](https://ollama.com), then run:
+> **Narratives require Ollama** (optional — everything else works without it).
+> Install from [ollama.com](https://ollama.com), then in a separate terminal:
 > ```bash
-> ollama pull mistral:7b
+> ollama pull mistral:7b   # one-time download (~4 GB)
 > ollama serve
 > ```
-> Without Ollama the rest of the dashboard (risk scores, SHAP, feedback) works normally.
 
 API explorer (Swagger UI): [http://localhost:8000/docs](http://localhost:8000/docs)
 
