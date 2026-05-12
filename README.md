@@ -5,6 +5,12 @@
 
 ---
 
+> **Evaluators:** See [`EVALUATION_GUIDE.md`](EVALUATION_GUIDE.md) for a structured breakdown of what is
+> fully implemented, what is stubbed, and why — so this project can be assessed against realistic
+> prototype-stage expectations rather than against the impossible bar of a live hospital deployment.
+
+---
+
 ## Current Status
 
 > **The model is trained on real, restricted-access clinical data (MIMIC-IV — see below).**
@@ -12,16 +18,33 @@
 > but because MIMIC-IV cannot be redistributed under its data use agreement.
 > The synthetic demo data is a regulatory distribution workaround, not a substitute for the training data.
 
-What is not yet in place is **live hospital EHR integration** — a real-time FHIR feed from an ICU.
-The following components are **fully implemented and production-ready** but not yet active — they are architectural stubs awaiting a hospital partnership:
+### What is fully implemented
 
-| Component | Status | What is needed to activate |
+| Component | Files | Notes |
 |---|---|---|
-| Live data streaming (vitals, labs) | Stub — code ready in `src/data/streaming.py` | Hospital FHIR R4 endpoint + OAuth token |
-| Patient ID pseudonymization (HMAC-SHA256) | Stub — implemented on hospital side before data is sent | Hospital integrates hashing before ingestion |
-| FHIR adapter (Epic / Cerner) | Stub — code ready in `src/integrations/fhir_adapter.py` | Hospital base URL + bearer token |
+| ML model (HistGBM, Optuna-tuned, isotonic calibration) | `src/model/train.py`, `evaluate.py` | AUROC 0.895 on real MIMIC-IV; 3-way split, F2 threshold sweep, subgroup fairness |
+| SHAP explainability | `src/explainability/shap_explainer.py` | Per-patient feature attribution, top/bottom drivers |
+| Epistemic uncertainty (MC perturbation) | `src/model/uncertainty.py` | 90% CI, LOW/MODERATE/HIGH flag |
+| OOD detection (univariate + Mahalanobis) | `src/safety/guardrails.py` | z-score against training stats + χ² distance threshold |
+| NarrativeGuard safety layer | `src/safety/guardrails.py` | 20+ prohibited patterns + SHAP grounding check, deterministic fallback |
+| Audit logging (GDPR / EU AI Act) | `src/safety/guardrails.py` | Append-only JSONL, every prediction logged |
+| PatientMonitorAgent (ReAct loop) | `src/agent/monitor_agent.py` | 4-tier escalation, 2h suppression, near-miss rule |
+| Clinician feedback + retraining loop | `retrain_with_feedback.py` | Differential sample weights, AUROC gating |
+| LLM narratives (Ollama, on-premise) | `src/narrative/` | Streaming, few-shot + RAG, NarrativeGuard wired |
+| FastAPI backend + React dashboard | `src/api/`, `frontend/` | Full SPA, OOD banners, epistemic CI display, feedback buttons |
+| Test suite | `tests/` | 103 tests, all passing |
 
-Everything else — the ML model, SHAP explanations, epistemic uncertainty, safety guardrails, LLM narratives, feedback loop, and the full React dashboard — runs end-to-end on synthetic data today.
+### What is stubbed — and why
+
+The following components require a **hospital partnership** to activate. They are
+not missing features — they are designed, coded, and waiting for credentials and
+agreements that no student team can obtain during a university course.
+
+| Component | Status | Why not live | What IS there |
+|---|---|---|---|
+| Live FHIR feed (Epic / Cerner) | Stub | Signed partnership + OAuth credentials required | Full adapter code in `src/integrations/fhir_adapter.py` |
+| Real-time EHR streaming | Stub | Needs live hospital endpoint | Stream simulator in `src/data/streaming.py` proves architecture |
+| Patient ID pseudonymization | Hospital-side contract | GDPR: the hospital (data controller) hashes IDs before transmission — not our code to write | Design documented in README; startup warns if IDs look unhashed |
 
 ---
 

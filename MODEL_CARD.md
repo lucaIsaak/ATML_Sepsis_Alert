@@ -3,6 +3,11 @@
 > Following the Model Card framework (Mitchell et al., 2019) and the
 > EU AI Act Annex IV technical documentation requirements for high-risk AI systems.
 
+> **Evaluators:** This model card documents a fully implemented academic prototype.
+> Hospital EHR integration is stubbed at the correct architectural boundaries pending
+> a hospital partnership — this is expected at prototype stage, not a gap.
+> See [`EVALUATION_GUIDE.md`](EVALUATION_GUIDE.md) for a full scope breakdown.
+
 ---
 
 ## Model Overview

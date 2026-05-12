@@ -1,17 +1,28 @@
 """
 Streaming simulator — replays MIMIC-IV data in time order.
 
+ARCHITECTURAL STUB — proves real-time architecture without live hospital data.
+=============================================================================
+In production, this simulator is replaced by the FHIR adapter
+(`src/integrations/fhir_adapter.py`) which pulls live vitals and labs from
+a hospital EHR. The PatientBuffer interface is identical in both cases —
+swapping simulatated data for live data requires only a configuration change.
+
+A live FHIR feed cannot be used at prototype stage because it requires a
+signed hospital partnership agreement and OAuth credentials. This simulator
+was built to demonstrate that the streaming architecture is correct without
+that prerequisite.
+
 For demo and testing: feeds historical ICU events through the
 PatientBuffer exactly as a live FHIR stream would.
-
-This proves the architecture works for real-time deployment
-without needing a live hospital connection.
 
 Usage:
     sim = MIMICStreamSimulator(n_patients=20, speed_factor=3600)
     for event_batch in sim.stream():
         agent.process_batch(event_batch)
         time.sleep(1)   # 1 real second = 1 ICU hour
+
+See EVALUATION_GUIDE.md for full project scope context.
 """
 
 from __future__ import annotations

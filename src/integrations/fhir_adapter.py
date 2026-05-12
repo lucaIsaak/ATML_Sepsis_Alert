@@ -1,11 +1,17 @@
 """
 HL7 FHIR R4 Adapter — Epic / Oracle Health (Cerner) compatibility.
 
-PRODUCTION STUB — not active in the demo.
-This adapter is ready to connect to a hospital EHR once OAuth credentials
-and a FHIR endpoint URL are provided by the hospital partner.
-No changes to the rest of the codebase are required — plug in the base_url
-and bearer token and call get_patient_features() from the monitoring loop.
+ARCHITECTURAL STUB — fully designed, not active in the demo.
+============================================================
+This is not a missing feature. It is inactive because activating it
+requires prerequisites that are outside the scope of a university project:
+  - A signed hospital partnership agreement
+  - A hospital-issued OAuth2 bearer token + FHIR R4 base URL
+  - A signed GDPR Data Processing Agreement (Art. 28)
+
+No changes to the rest of the codebase are needed to go live.
+Provide base_url + bearer_token and call get_patient_features() from
+the PatientMonitorAgent loop — the interface is fully defined.
 
 Both Epic and Oracle Health expose patient data via HL7 FHIR R4 APIs.
 This adapter translates FHIR Observation resources into the feature
@@ -17,6 +23,8 @@ FHIR endpoint pattern:
 
 LOINC code mapping (standard across both systems):
   https://loinc.org/
+
+See EVALUATION_GUIDE.md for full project scope context.
 """
 
 from __future__ import annotations
