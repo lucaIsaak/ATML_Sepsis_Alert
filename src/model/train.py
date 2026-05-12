@@ -59,6 +59,8 @@ def train(cfg: dict | None = None) -> HistGradientBoostingClassifier:
         learning_rate=model_cfg["learning_rate"],
         max_iter=model_cfg["n_estimators"],
         min_samples_leaf=model_cfg["min_child_samples"],
+        max_depth=model_cfg.get("max_depth"),           # None = no depth limit
+        l2_regularization=model_cfg.get("l2_regularization", 0.0),
         class_weight=model_cfg["class_weight"],
         random_state=42,
         early_stopping=False,

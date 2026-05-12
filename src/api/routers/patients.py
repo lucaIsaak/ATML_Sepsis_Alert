@@ -47,6 +47,8 @@ def _get_explainer(artifact: dict, features_df: pd.DataFrame):
 
 
 def _risk_label(score: float) -> str:
+    if score >= 0.8:
+        return "CRITICAL"
     if score >= 0.6:
         return "HIGH"
     if score >= 0.4:

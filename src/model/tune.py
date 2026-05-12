@@ -20,11 +20,12 @@ import argparse
 from pathlib import Path
 
 import joblib
+import numpy as np
 import optuna
 import pandas as pd
 import yaml
 from sklearn.ensemble import HistGradientBoostingClassifier
-from sklearn.model_selection import StratifiedKFold, cross_val_score
+from sklearn.model_selection import StratifiedKFold, cross_val_score, train_test_split
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
@@ -83,13 +84,19 @@ def tune(n_trials: int = 50, cfg: dict | None = None) -> dict:
     df = pd.read_parquet(data_path)
 
     feature_cols = get_feature_cols(df)
-    features = df[feature_cols]
-    labels = df["sepsis_label"]
 
-    print(f"Tuning on {len(df):,} stays | {n_trials} Optuna trials | 5-fold CV")
+    # Split first — CV and final fit both on train split only to avoid leakage
+    x_train, _, y_train, _ = train_test_split(
+        df[feature_cols], df["sepsis_label"],
+        test_size=0.2, random_state=42, stratify=df["sepsis_label"],
+    )
+
+    print(f"Tuning on {len(x_train):,} train stays | {n_trials} Optuna trials | 5-fold CV")
 
     study = optuna.create_study(direction="maximize")
-    study.optimize(_make_objective(features, labels), n_trials=n_trials, show_progress_bar=True)
+    study.optimize(
+        _make_objective(x_train, y_train), n_trials=n_trials, show_progress_bar=True
+    )
 
     best = study.best_params
     print(f"\nBest AUROC (CV): {study.best_value:.4f}")
@@ -97,27 +104,49 @@ def tune(n_trials: int = 50, cfg: dict | None = None) -> dict:
     for k, v in best.items():
         print(f"  {k:25s}: {v}")
 
-    # Retrain on full dataset with best params and save
+    # Retrain on train split only (not full dataset) to preserve test-set integrity
     best_model = HistGradientBoostingClassifier(
         **best,
         class_weight="balanced",
         random_state=42,
         early_stopping=False,
     )
-    best_model.fit(features, labels)
+    best_model.fit(x_train, y_train)
+
+    # Compute training stats for InputGuard and epistemic uncertainty
+    training_stats = {
+        col: {"mean": float(x_train[col].mean()), "std": float(x_train[col].std())}
+        for col in feature_cols
+    }
+    feat_matrix = x_train.fillna(x_train.mean()).values.astype(float)
+    training_mean = feat_matrix.mean(axis=0)
+    try:
+        cov = np.cov(feat_matrix, rowvar=False)
+        training_cov_inv = np.linalg.pinv(cov)
+    except Exception:  # pylint: disable=broad-except
+        training_cov_inv = None
 
     artifact_path = Path(cfg["model"]["artifact_path"])
     artifact_path.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(
-        {"model": best_model, "feature_cols": feature_cols, "auroc": study.best_value},
+        {
+            "model":            best_model,
+            "feature_cols":     feature_cols,
+            "auroc":            study.best_value,
+            "training_stats":   training_stats,
+            "training_mean":    training_mean,
+            "training_cov_inv": training_cov_inv,
+        },
         artifact_path,
     )
     print(f"\nSaved tuned model to {artifact_path}")
     print("\nPaste into config.yaml → model section:")
-    print(f"  num_leaves:        {best.get('max_leaf_nodes', 64)}")
-    print(f"  learning_rate:     {best.get('learning_rate', 0.05):.4f}")
-    print(f"  n_estimators:      {best.get('max_iter', 500)}")
-    print(f"  min_child_samples: {best.get('min_samples_leaf', 20)}")
+    print(f"  num_leaves:         {best.get('max_leaf_nodes', 64)}")
+    print(f"  learning_rate:      {best.get('learning_rate', 0.05):.4f}")
+    print(f"  n_estimators:       {best.get('max_iter', 500)}")
+    print(f"  min_child_samples:  {best.get('min_samples_leaf', 20)}")
+    print(f"  max_depth:          {best.get('max_depth', 'null')}")
+    print(f"  l2_regularization:  {best.get('l2_regularization', 0.0):.4f}")
 
     return best
 

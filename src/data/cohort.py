@@ -80,6 +80,9 @@ def extract_cohort(cfg: dict | None = None) -> pd.DataFrame:
         p.age,
         p.gender,
         CASE WHEN s.hadm_id IS NOT NULL THEN 1 ELSE 0 END AS sepsis_label,
+        -- sepsis_onset_proxy: intime + horizon retained for future prospective
+        -- label alignment. Not used in current feature extraction (features.py
+        -- always queries the full 24h window from intime regardless of horizon).
         CASE
             WHEN s.hadm_id IS NOT NULL
             THEN icu.intime + INTERVAL ({horizon}) HOUR

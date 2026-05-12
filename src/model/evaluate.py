@@ -35,7 +35,7 @@ def _score_resp_rate(rr: float) -> int:
         return 3
     if rr >= 21:
         return 2
-    if rr >= 9:
+    if rr <= 11:   # 9-11 = 1 point; 12-20 = 0 points (per NEWS2 spec)
         return 1
     return 0
 
@@ -157,16 +157,16 @@ def _subgroup_auroc(df_test: "pd.DataFrame", y_score: np.ndarray) -> dict:
                 except ValueError:
                     pass
 
-    # Age quartile subgroup
+    # Age subgroup — fixed clinical brackets matching MODEL_CARD documentation
     if "age" in df_test.columns:
         age_vals = df_test["age"].values
-        quartiles = np.percentile(age_vals[~np.isnan(age_vals)], [25, 50, 75])
-        age_labels = [
-            ("young",    age_vals <  quartiles[0]),
-            ("middle",   (age_vals >= quartiles[0]) & (age_vals < quartiles[2])),
-            ("elderly",  age_vals >= quartiles[2]),
+        age_brackets = [
+            ("18_44",  (age_vals >= 18)  & (age_vals <  45)),
+            ("45_64",  (age_vals >= 45)  & (age_vals <  65)),
+            ("65_74",  (age_vals >= 65)  & (age_vals <  75)),
+            ("75plus", (age_vals >= 75)),
         ]
-        for label, mask in age_labels:
+        for label, mask in age_brackets:
             if mask.sum() >= 20:
                 try:
                     sub_auroc = roc_auc_score(
@@ -212,9 +212,10 @@ def evaluate(cfg: dict | None = None) -> dict:
     brier        = brier_score_loss(y_true, y_score)
     news2_auroc  = roc_auc_score(y_true, news2_scores)
 
-    # Clinical threshold metrics (nurse alert @ 0.4, doctor alert @ 0.6)
+    # Clinical threshold metrics at all three alert tiers
     thresh_04 = _threshold_metrics(y_true, y_score, threshold=0.4)
     thresh_06 = _threshold_metrics(y_true, y_score, threshold=0.6)
+    thresh_08 = _threshold_metrics(y_true, y_score, threshold=0.8)
 
     # Fairness — subgroup AUROC
     subgroup = _subgroup_auroc(df_test, y_score)
@@ -228,6 +229,7 @@ def evaluate(cfg: dict | None = None) -> dict:
         "sepsis_prevalence": float(y_true.mean()),
         "threshold_0.4": thresh_04,
         "threshold_0.6": thresh_06,
+        "threshold_0.8": thresh_08,
         **subgroup,
     }
 
@@ -246,6 +248,10 @@ def evaluate(cfg: dict | None = None) -> dict:
     print(f"  Sensitivity: {thresh_06['sensitivity']:.3f}  "
           f"Specificity: {thresh_06['specificity']:.3f}  "
           f"PPV: {thresh_06['ppv']:.3f}  NPV: {thresh_06['npv']:.3f}")
+    print("At threshold 0.8 (critical escalation):")
+    print(f"  Sensitivity: {thresh_08['sensitivity']:.3f}  "
+          f"Specificity: {thresh_08['specificity']:.3f}  "
+          f"PPV: {thresh_08['ppv']:.3f}  NPV: {thresh_08['npv']:.3f}")
     if subgroup:
         print("\nSubgroup AUROC (fairness):")
         for key, val in subgroup.items():
