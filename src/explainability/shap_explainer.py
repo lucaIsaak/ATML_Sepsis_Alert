@@ -25,14 +25,17 @@ FEATURE_LABELS = {
     "resp_rate_min": "Respiratory Rate (min)",
     "resp_rate_max": "Respiratory Rate (max)",
     "resp_rate_last": "Respiratory Rate (last)",
+    "resp_rate_trend": "Respiratory Rate (trend)",
     "temperature_f_mean": "Temperature (mean)",
     "temperature_f_min": "Temperature (min)",
     "temperature_f_max": "Temperature (max)",
     "temperature_f_last": "Temperature (last)",
+    "temperature_f_trend": "Temperature (trend)",
     "spo2_mean": "SpO2 (mean)",
     "spo2_min": "SpO2 (min)",
     "spo2_max": "SpO2 (max)",
     "spo2_last": "SpO2 (last)",
+    "spo2_trend": "SpO2 (trend)",
     "lactate_last": "Lactate (last)",
     "lactate_mean": "Lactate (mean)",
     "lactate_delta": "Lactate (change)",
@@ -56,9 +59,6 @@ FEATURE_LABELS = {
     "glucose_delta": "Glucose (change)",
     "heart_rate_trend": "Heart Rate (trend)",
     "map_trend": "Mean Art. Pressure (trend)",
-    "resp_rate_trend": "Respiratory Rate (trend)",
-    "temperature_f_trend": "Temperature (trend)",
-    "spo2_trend": "SpO2 (trend)",
     "lactate_trend": "Lactate (trend)",
     "wbc_trend": "WBC (trend)",
     "creatinine_trend": "Creatinine (trend)",
@@ -150,7 +150,14 @@ def explain_patient(  # pylint: disable=too-many-arguments,too-many-positional-a
             "direction": "increases_risk" if shap_val > 0 else "decreases_risk",
         })
 
-    label = "HIGH" if risk_score >= 0.6 else "MODERATE" if risk_score >= 0.4 else "LOW"
+    if risk_score >= 0.8:
+        label = "CRITICAL"
+    elif risk_score >= 0.6:
+        label = "HIGH"
+    elif risk_score >= 0.4:
+        label = "MODERATE"
+    else:
+        label = "LOW"
 
     return SHAPExplanation(
         stay_id=stay_id,

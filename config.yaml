@@ -15,6 +15,8 @@ model:
   learning_rate: 0.0163
   n_estimators: 859
   min_child_samples: 95
+  max_depth: null         # null = no depth limit; set from tune.py output after retuning
+  l2_regularization: 0.065  # Optuna best (MODEL_CARD)
   class_weight: "balanced"
 
 narrative:
