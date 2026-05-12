@@ -1,0 +1,25 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Frontend
+frontend/node_modules/
+
+# Raw MIMIC-IV data (large, never in image)
+physionet.org/
+
+# Generated at runtime (mounted as volumes)
+data/
+models/
+logs/
+
+# Secrets
+.env
+
+# Dev tools
+.git/
+notebooks/
+*.ipynb

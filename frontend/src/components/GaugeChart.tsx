@@ -7,7 +7,7 @@ interface GaugeChartProps {
  * Pure SVG half-circle gauge.
  * ViewBox: 0 0 200 120, center at (100, 100), radius 80.
  * Three colored background zones: green (0-40), yellow (40-60), blue (60-100).
- * Value arc shown in primary blue. Threshold line at 60%.
+ * Value arc shown in primary blue. Threshold line at 40% (alert threshold).
  */
 export function GaugeChart({ value, label }: GaugeChartProps) {
   const cx = 100
@@ -37,8 +37,8 @@ export function GaugeChart({ value, label }: GaugeChartProps) {
 
   const pct = Math.min(Math.max(value, 0), 100) / 100
 
-  // Threshold line at 60%
-  const thresholdAngle = 180 - 0.6 * 180   // = 72°
+  // Threshold line at 40% (F2-optimal alert threshold from config)
+  const thresholdAngle = 180 - 0.4 * 180   // = 108°
   const thresholdOuter = polarToCartesian(thresholdAngle)
   const thresholdInner = {
     x: cx + (r - strokeWidth - 2) * Math.cos((thresholdAngle * Math.PI) / 180),

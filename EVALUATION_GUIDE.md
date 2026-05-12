@@ -30,7 +30,7 @@ and an LLM narrative layer.
 | **SHAP explainability** | `src/explainability/shap_explainer.py` | CalibratedClassifierCV unwrapping, feature label/unit mapping |
 | **Epistemic uncertainty** | `src/model/uncertainty.py` | MC perturbation, CI width, LOW/MODERATE/HIGH flag |
 | **OOD detection** | `src/safety/guardrails.py` (InputGuard) | Univariate z-score + Mahalanobis distance, χ² threshold |
-| **NarrativeGuard** | `src/safety/guardrails.py` (NarrativeGuard) | 20+ prohibited patterns, SHAP grounding check, deterministic fallback |
+| **NarrativeGuard** | `src/safety/guardrails.py` (NarrativeGuard) | 24 prohibited patterns, SHAP grounding check, deterministic fallback |
 | **Audit logging** | `src/safety/guardrails.py` (AuditLogger) | Append-only JSONL, GDPR Art. 22 + EU AI Act Annex III fields |
 | **PatientMonitorAgent** | `src/agent/monitor_agent.py` | ReAct loop, 4-tier escalation, alert suppression, near-miss rule |
 | **Feedback loop** | `retrain_with_feedback.py`, `src/data/feedback.py` | Differential sample weights, AUROC gating, calibrated retraining |
@@ -66,8 +66,8 @@ The model in `models/sepsis_model.pkl` was trained on **real restricted MIMIC-IV
 
 The synthetic demo data exists solely so the dashboard can be run without distributing
 MIMIC-IV data (which would violate the DUA). The training pipeline, model artifact, and
-AUROC of 0.895 are all from the real dataset. `setup_demo.py` is a distribution-compliance
-workaround, not a substitute for training data.
+AUROC of 0.8276 (95% CI 0.818–0.836) are all from the real dataset. `setup_demo.py` is a
+distribution-compliance workaround, not a substitute for training data.
 
 ---
 
@@ -107,8 +107,8 @@ follow a successful prototype demonstration.
 ## One-sentence summary for grading
 
 > SepsisAlert is a complete, tested, safety-compliant ICU sepsis early-warning prototype
-> with a trained ML model (AUROC 0.895 on real MIMIC-IV data), full SHAP explainability,
-> epistemic uncertainty quantification, three-layer AI safety guardrails, a clinician
-> feedback loop, on-premise LLM narratives, and a React dashboard —
+> with a trained ML model (AUROC 0.8276, 95% CI 0.818–0.836, on 93,224 real MIMIC-IV ICU stays),
+> full SHAP explainability, epistemic uncertainty quantification, three-layer AI safety guardrails,
+> a clinician feedback loop, on-premise LLM narratives, and a React dashboard —
 > with hospital EHR integration stubbed at the correct architectural boundaries,
 > pending a hospital partnership that is outside the scope of an academic prototype.

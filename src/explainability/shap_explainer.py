@@ -148,6 +148,9 @@ def build_explainer(model, x_background=None) -> shap.TreeExplainer:
             model = model.estimator
     except ImportError:
         pass
+    # Unwrap our custom isotonic calibration wrapper — SHAP needs the raw HistGBM
+    if hasattr(model, "base_model"):
+        model = model.base_model
     return shap.TreeExplainer(model)
 
 

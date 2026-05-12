@@ -1,7 +1,7 @@
 export interface Patient {
   stay_id: number
   risk_score: number
-  risk_label: 'HIGH' | 'MODERATE' | 'LOW'
+  risk_label: 'CRITICAL' | 'HIGH' | 'MODERATE' | 'LOW'
   age: number
   first_careunit: string
   gender?: string
@@ -56,6 +56,27 @@ export interface ModelStats {
   features: number
   roc_sepsis: Array<{ fpr: number; tpr: number }>
   roc_news2: Array<{ fpr: number; tpr: number }>
+}
+
+export interface ModelInfo {
+  algorithm: string
+  auroc: number
+  auroc_ci_95: [number, number]
+  news2_auroc_testset: number
+  auprc_testset: number
+  brier_score: number
+  feature_count: number
+  sklearn_version: string
+  training_data: string
+  label_strategy: string
+  tuning: string
+  subgroup_auroc: {
+    male: number
+    female: number
+    age_young: number
+    age_middle: number
+    age_elderly: number
+  }
 }
 
 export interface DriftFeature {
