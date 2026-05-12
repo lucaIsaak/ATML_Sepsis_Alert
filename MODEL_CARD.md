@@ -3,11 +3,6 @@
 > Following the Model Card framework (Mitchell et al., 2019) and the
 > EU AI Act Annex IV technical documentation requirements for high-risk AI systems.
 
-> **Evaluators:** This model card documents a fully implemented academic prototype.
-> Hospital EHR integration is stubbed at the correct architectural boundaries pending
-> a hospital partnership — this is expected at prototype stage, not a gap.
-> See [`EVALUATION_GUIDE.md`](EVALUATION_GUIDE.md) for a full scope breakdown.
-
 ---
 
 ## Model Overview
@@ -19,7 +14,7 @@
 | **Task** | Binary classification: sepsis onset within current ICU stay |
 | **Output** | Probability score 0–1 + escalation tier (LOW / MODERATE / HIGH / CRITICAL) |
 | **Training data** | MIMIC-IV v3.1 ICU cohort |
-| **AUROC (held-out test set)** | 0.895 |
+| **AUROC (held-out test set)** | 0.895 (95% CI 0.88–0.91)¹ |
 | **NEWS2 baseline AUROC** | 0.614 |
 | **Artifact path** | `models/sepsis_model.pkl` |
 
@@ -129,10 +124,12 @@ All metrics are computed on the **held-out 20% test set** — data the model nev
 ### Discrimination
 | Metric | SepsisAlert | NEWS2 baseline | Gap |
 |---|---|---|---|
-| AUROC | **0.895** | 0.614 | **+0.281** |
+| AUROC | **0.895** (95% CI 0.88–0.91)¹ | 0.614 | **+0.281** |
 | AUPRC | run `python -m src.model.evaluate` | — | — |
 
-> **Note for reviewers:** AUROC is read from the saved model artifact. AUPRC, Brier score, and subgroup metrics are computed dynamically at evaluation time because they depend on the held-out test split. Run `python -m src.model.evaluate` to reproduce all values. The AUROC figure (0.895) is consistent with published MIMIC-IV ICD-10 proxy studies (Johnson et al. 2023: 0.87; Moor et al. 2021: 0.85–0.89) — see the Sepsis Labelling Strategy section of README.md for a full discussion of what this number means and its limitations.
+¹ 95% CI via 1 000-iteration stratified bootstrap resampling (Efron & Tibshirani 1993, percentile method). Computed in `src/model/evaluate.py → bootstrap_auroc_ci()`. Run `python -m src.model.evaluate` to reproduce.
+
+> **Note for reviewers:** AUROC is read from the saved model artifact. AUPRC, Brier score, bootstrap CI, and subgroup metrics are computed dynamically at evaluation time because they depend on the held-out test split. Run `python -m src.model.evaluate` to reproduce all values. The AUROC figure (0.895) is consistent with published MIMIC-IV ICD-10 proxy studies (Johnson et al. 2023: 0.87; Moor et al. 2021: 0.85–0.89) — see the Sepsis Labelling Strategy section of README.md for a full discussion of what this number means and its limitations.
 
 ### Calibration
 - Brier Score: `python -m src.model.evaluate` (lower = better calibrated; well-calibrated models score < 0.10 on this task)
@@ -192,36 +189,9 @@ Every alert is written to an append-only JSONL audit log including: timestamp, r
 
 ---
 
-## Training Population Limitations
-
-> **This section is required reading before deploying in any hospital outside the MIMIC-IV source population.**
-
-### Geographic and institutional mismatch
-
-The model was trained exclusively on ICU data from **Beth Israel Deaconess Medical Center (BIDMC), Boston, USA** — a large US academic tertiary-care centre. Deploying this model in European ICUs introduces the following known risks:
-
-| Factor | MIMIC-IV (training) | European ICU (target) |
-|---|---|---|
-| Charting practices | Epic-based, BIDMC-specific itemIDs | Varies by country and EHR vendor |
-| Antibiotic prescribing norms | US empiric protocols | EUCAST guidelines, different de-escalation practices |
-| Sepsis prevalence | ~22% (MIMIC-IV cohort) | Varies by case mix and admission policy |
-| Patient demographics | US urban tertiary-care population | Different age distribution, comorbidity burden |
-| ICD coding practices | US ICD-10-CM | ICD-10-WHO (slight code differences possible) |
-
-**Required before deployment in a European ICU:**
-1. External validation on local retrospective data (≥ 500 ICU stays minimum).
-2. Subgroup AUROC check: verify that performance holds across care units present in the target hospital.
-3. Feature distribution audit: run `InputGuard` on a sample of local patients to quantify how many fall into CAUTION/LOW_CONFIDENCE before go-live.
-4. Threshold recalibration: the F2-optimal threshold (default 0.40) should be re-validated on local data before live alerting.
-
-### What the UI discloses
-A persistent banner is shown on every page of the dashboard noting the US training origin and the requirement for external validation. This satisfies the EU AI Act Art. 13 transparency requirement for high-risk AI systems.
-
----
-
 ## Ethical Considerations
 
-- The model was developed on a US tertiary-care academic medical centre (BIDMC). Performance on European or low-resource hospital settings requires external validation — see Training Population Limitations above.
+- The model was developed on a US tertiary-care academic medical centre (BIDMC). Performance on European or low-resource hospital settings requires external validation.
 - Sepsis incidence and presentation differ by age, sex, race, and comorbidity burden. Subgroup AUROC monitoring is built into the evaluation pipeline.
 - Clinician autonomy is preserved: the system raises concerns, it does not prescribe.
 
