@@ -46,7 +46,9 @@ def _build_predictions(features_df: pd.DataFrame, artifact: dict, cohort_df: pd.
     from src.model.predict import predict_batch  # noqa: PLC0415
     sampled = features_df.sample(n=min(250, len(features_df)), random_state=99)
     preds = predict_batch(sampled, artifact)
-    display_cols = ["stay_id"] + [c for c in ["age", "gender", "first_careunit"]
+    # age is already in preds (from features.parquet); only pull gender/first_careunit from cohort
+    # to avoid pandas renaming age → age_x / age_y on merge
+    display_cols = ["stay_id"] + [c for c in ["gender", "first_careunit"]
                                    if c in cohort_df.columns]
     return preds.merge(cohort_df[display_cols], on="stay_id", how="left")
 

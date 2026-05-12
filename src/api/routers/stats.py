@@ -130,7 +130,7 @@ def _hot_reload_model() -> None:
         cohort_df   = app.state.cohort_df
         sample = features_df.sample(n=min(250, len(features_df)), random_state=99)
         new_preds = predict_batch(sample, new_artifact)
-        display_cols = ["stay_id"] + [c for c in ["age", "gender", "first_careunit"]
+        display_cols = ["stay_id"] + [c for c in ["gender", "first_careunit"]
                                        if c in cohort_df.columns]
         new_preds = new_preds.merge(cohort_df[display_cols], on="stay_id", how="left")
         app.state.predictions = new_preds
