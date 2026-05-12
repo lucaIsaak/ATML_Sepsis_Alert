@@ -55,10 +55,6 @@ _FEATURE_LABELS: dict[str, str] = {
     "platelets_last":    "Platelets",
     "bicarbonate_last":  "Bicarbonate",
     "glucose_last":      "Glucose",
-    "sodium_last":       "Sodium",
-    "potassium_last":    "Potassium",
-    "bun_last":          "BUN",
-    "hemoglobin_last":   "Hemoglobin",
 }
 
 # Priority order — clinical vitals first, then labs, then engineered features
@@ -66,7 +62,6 @@ _PRIORITY_FEATURES = [
     "map_last", "map_mean", "heart_rate_last", "spo2_min", "resp_rate_last",
     "lactate_last", "creatinine_last", "wbc_last", "temperature_f_last",
     "bilirubin_last", "platelets_last", "bicarbonate_last", "glucose_last",
-    "hemoglobin_last", "bun_last",
 ]
 
 

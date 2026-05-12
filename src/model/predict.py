@@ -39,7 +39,7 @@ def predict_patient(features: dict, artifact: dict | None = None) -> dict:
     Returns:
         {
             "risk_score": float,       # 0–1 probability
-            "risk_label": str,         # "HIGH" / "MODERATE" / "LOW"
+            "risk_label": str,         # "CRITICAL" / "HIGH" / "MODERATE" / "LOW"
             "feature_vector": ndarray, # aligned feature array for SHAP
         }
     """
@@ -53,7 +53,9 @@ def predict_patient(features: dict, artifact: dict | None = None) -> dict:
     feat_df = pd.DataFrame([features])[feature_cols]
     risk_score = float(model.predict_proba(feat_df)[0, 1])
 
-    if risk_score >= 0.6:
+    if risk_score >= 0.8:
+        label = "CRITICAL"
+    elif risk_score >= 0.6:
         label = "HIGH"
     elif risk_score >= 0.4:
         label = "MODERATE"
@@ -87,8 +89,8 @@ def predict_batch(df: pd.DataFrame, artifact: dict | None = None) -> pd.DataFram
     result["risk_score"] = proba
     result["risk_label"] = pd.cut(
         proba,
-        bins=[0, 0.4, 0.6, 1.0],
-        labels=["LOW", "MODERATE", "HIGH"],
+        bins=[0, 0.4, 0.6, 0.8, 1.0],
+        labels=["LOW", "MODERATE", "HIGH", "CRITICAL"],
         include_lowest=True,
     ).astype(str)
     return result
