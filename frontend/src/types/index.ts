@@ -10,7 +10,7 @@ export interface Patient {
 export interface ShapFeature {
   label: string
   shap: number
-  value: number
+  value: number | null
   feature: string
 }
 

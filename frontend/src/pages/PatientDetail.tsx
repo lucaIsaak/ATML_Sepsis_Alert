@@ -57,7 +57,7 @@ export function PatientDetailPage() {
     )
   }
 
-  const gaugePct = Math.round(patient.risk_score * 100)
+  const gaugePct = Math.floor(patient.risk_score * 100)
 
   return (
     <div className="space-y-6">
@@ -77,7 +77,7 @@ export function PatientDetailPage() {
             'rounded-md px-4 py-3 text-sm flex items-center gap-2',
             feedback.feedback_type === 'confirmed_sepsis'
               ? 'bg-green-50 text-green-800 border border-green-200'
-              : 'bg-amber-50 text-amber-800 border border-amber-200',
+              : 'bg-slate-50 text-slate-700 border border-slate-200',
           ].join(' ')}
         >
           {feedback.feedback_type === 'confirmed_sepsis' ? (
@@ -89,8 +89,8 @@ export function PatientDetailPage() {
             Clinician feedback:{' '}
             <strong>
               {feedback.feedback_type === 'confirmed_sepsis'
-                ? 'Sepsis confirmed'
-                : 'Alert flagged wrong'}
+                ? 'Labelled: has sepsis'
+                : 'Labelled: no sepsis'}
             </strong>{' '}
             (risk score at time: {feedback.risk_score.toFixed(3)})
           </span>
@@ -226,29 +226,46 @@ export function PatientDetailPage() {
           }
         />
         <div className="flex flex-col gap-2">
-          <span className="text-xs font-medium text-muted-foreground">Clinical feedback</span>
+          <span className="text-xs font-medium text-muted-foreground">Clinical ground truth</span>
           <div className="flex gap-2">
             <Button
               size="sm"
               variant="outline"
-              className="border-green-500 text-green-700 hover:bg-green-50"
+              className={
+                feedback?.feedback_type === 'confirmed_sepsis'
+                  ? 'border-green-600 bg-green-50 text-green-800 font-semibold'
+                  : feedback
+                  ? 'border-green-500 text-green-700 hover:bg-green-50 opacity-40'
+                  : 'border-green-500 text-green-700 hover:bg-green-50'
+              }
               onClick={() => feedbackMutation.mutate({ type: 'confirmed_sepsis' })}
               disabled={feedbackMutation.isPending}
+              title="Patient has / developed sepsis — used as positive label for retraining"
             >
               <CheckCircle className="h-3.5 w-3.5" />
-              Confirm Sepsis
+              Has sepsis
             </Button>
             <Button
               size="sm"
               variant="outline"
-              className="border-amber-500 text-amber-700 hover:bg-amber-50"
+              className={
+                feedback?.feedback_type === 'flagged_wrong'
+                  ? 'border-slate-500 bg-slate-100 text-slate-800 font-semibold'
+                  : feedback
+                  ? 'border-slate-400 text-slate-600 hover:bg-slate-50 opacity-40'
+                  : 'border-slate-400 text-slate-600 hover:bg-slate-50'
+              }
               onClick={() => feedbackMutation.mutate({ type: 'flagged_wrong' })}
               disabled={feedbackMutation.isPending}
+              title="Patient does not have sepsis — used as negative label for retraining"
             >
               <XCircle className="h-3.5 w-3.5" />
-              Flag Wrong
+              No sepsis
             </Button>
           </div>
+          <p className="text-[11px] text-muted-foreground leading-tight">
+            {feedback ? 'Click again to change label' : 'Label the outcome to improve future predictions'}
+          </p>
         </div>
       </div>
 
