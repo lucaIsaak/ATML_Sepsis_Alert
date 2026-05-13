@@ -1,9 +1,12 @@
 # SepsisAlert — docker-compose
 #
-# Quick start:
-#   docker-compose up --build
+# Quick start (no build needed — uses pre-built images from Docker Hub):
+#   docker-compose up
 #   Open http://localhost (React dashboard)
 #   API docs: http://localhost:8000/docs
+#
+# To rebuild from source instead:
+#   docker-compose up --build
 #
 # Narratives require Ollama running on the host:
 #   ollama pull mistral:7b && ollama serve
@@ -12,6 +15,7 @@
 services:
 
   api:
+    image: lucaisaak/sepsis-alert-api:latest
     build: .
     ports:
       - "8000:8000"
@@ -34,6 +38,7 @@ services:
       start_period: 120s
 
   frontend:
+    image: lucaisaak/sepsis-alert-frontend:latest
     build:
       context: ./frontend
       dockerfile: Dockerfile
