@@ -241,3 +241,4 @@ frontend/build/
 # Native libraries
 *.dylib
 .claude/worktrees/
+logs/
