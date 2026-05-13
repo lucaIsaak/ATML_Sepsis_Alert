@@ -121,7 +121,7 @@ export function GaugeChart({ value, label }: GaugeChartProps) {
           className="text-2xl font-bold fill-foreground"
           style={{ fontSize: '22px', fontWeight: 700, fill: '#0f172a', fontFamily: 'Inter, sans-serif' }}
         >
-          {value.toFixed(0)}%
+          {Math.floor(value)}%
         </text>
 
         {/* Min/max labels */}

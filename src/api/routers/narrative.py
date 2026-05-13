@@ -176,7 +176,7 @@ async def stream_narrative(body: StreamRequest, request: Request):
         confidence_flag=cached_ood.get("ood_flag", "NORMAL"),
     )
 
-    def _generate():
+    async def _generate():
         # Open the HTTP stream immediately so the frontend shows a loading state
         # rather than waiting 20-30 s for the first byte from Ollama.
         yield ""
@@ -214,11 +214,14 @@ async def stream_narrative(body: StreamRequest, request: Request):
             narrative_result=nar_result,
         )
 
-        # 4. Stream validated (or fallback) text in small chunks for typewriter effect
+        # 4. Stream validated (or fallback) text in small chunks for typewriter effect.
+        # asyncio.sleep gives the event loop a chance to flush each chunk to the
+        # client before yielding the next — without this all chunks arrive in one burst.
         validated = nar_result.text
         chunk_size = 8
         for i in range(0, len(validated), chunk_size):
             yield validated[i:i + chunk_size]
+            await asyncio.sleep(0.02)
 
     return StreamingResponse(
         _generate(),

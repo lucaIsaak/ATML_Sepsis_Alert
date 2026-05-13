@@ -127,8 +127,17 @@ async def get_patient(stay_id: int, request: Request) -> dict:
         if stay_id not in _uncertainty_cache:
             try:
                 from src.model.uncertainty import estimate_uncertainty  # noqa: PLC0415
+                # Use the base model (pre-calibration) for MC perturbation.
+                # Running perturbations through IsotonicCalibrated amplifies
+                # variance: small feature changes can jump across calibration
+                # step boundaries, producing [0.03, 1.00] CIs even for
+                # unambiguous CRITICAL patients. The base model output is
+                # smooth and gives a meaningful local sensitivity estimate.
+                _unc_model = artifact["model"]
+                if hasattr(_unc_model, "base_model"):
+                    _unc_model = _unc_model.base_model
                 _uncertainty_cache[stay_id] = estimate_uncertainty(
-                    model=artifact["model"],
+                    model=_unc_model,
                     feature_vector=feature_vector,
                     feature_names=list(feature_cols),
                     training_stats=artifact.get("training_stats", {}),

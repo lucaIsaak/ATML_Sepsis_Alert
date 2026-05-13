@@ -38,7 +38,10 @@ class IsotonicCalibrated:
 
     def predict_proba(self, X) -> np.ndarray:  # noqa: ANN001
         raw = self.base_model.predict_proba(X)[:, 1]
-        cal = np.clip(self.calibrator.predict(raw), 0.0, 1.0)
+        # Clip to (0, 0.999) — isotonic regression extrapolates to exactly 1.0
+        # for inputs above the training range; a calibrated model should never
+        # claim absolute certainty.
+        cal = np.clip(self.calibrator.predict(raw), 0.001, 0.999)
         return np.column_stack([1.0 - cal, cal])
 
     def predict(self, X) -> np.ndarray:  # noqa: ANN001
