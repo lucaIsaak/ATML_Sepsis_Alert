@@ -365,6 +365,35 @@ python finetune_narrative.py                 # export + train + load into Ollama
 
 Prompts are SBAR-structured and grounded in SHAP output only. The LLM **cannot** override the model score.
 
+### Optional: Claude API backend
+
+For deployments without an on-premise GPU, the narrative layer can be switched to the Anthropic Claude API (`claude-haiku-4-5-20251001` or `claude-sonnet-4-6`). Both backends implement the same interface — `NarrativeAgent` works unchanged with either.
+
+**Unit economics comparison:**
+
+| Backend | Cost / narrative | Infrastructure |
+|---|---|---|
+| Ollama `mistral:7b` | ~€0 (after GPU amortisation) | RTX 4090 / L4 on-prem |
+| Claude Haiku | ~€0.0008 | No GPU required |
+| Claude Sonnet | ~€0.006 | No GPU required |
+
+At a 200-bed ICU with hourly re-scoring, Haiku costs ~**€1.40/day** — under 4% of COGS at Standard tier. Sonnet costs ~€10/day. Ollama remains the default for maximum GDPR control and zero per-call cost; Claude is the right choice when the hospital cannot operate an on-premise GPU node.
+
+**To enable:**
+
+1. Sign a Data Processing Agreement (DPA) with Anthropic (required under GDPR Art. 28 before any patient-adjacent data is processed by a third-party cloud service).
+2. Set `ANTHROPIC_API_KEY` in your `.env` file.
+3. Edit `config.yaml`:
+
+```yaml
+narrative:
+  provider: "claude"
+  claude_model: "claude-haiku-4-5-20251001"   # or claude-sonnet-4-6
+  gdpr_cloud_dpa_acknowledged: true            # set true once DPA is signed
+```
+
+> **Note:** Only de-identified SHAP feature summaries (e.g. `Lactate = 4.2, WBC = 18.1`) are sent to Claude. The patient `stay_id` is never included in the prompt. However, combinations of clinical values from a small ICU can still be quasi-identifiable — a signed DPA is mandatory before enabling this backend.
+
 ---
 
 ## REST API (FastAPI backend)
@@ -411,6 +440,7 @@ ATML_Sepsis_Alert/
 │   │   └── shap_explainer.py       # SHAP wrapper + feature label/unit mapping
 │   ├── narrative/
 │   │   ├── ollama_client.py        # Ollama narrative generation + streaming
+│   │   ├── claude_client.py        # Claude API backend (optional, requires DPA)
 │   │   ├── prompts.py              # SBAR prompt templates + clinical thresholds
 │   │   └── transcribe.py           # Local Whisper audio transcription
 │   ├── safety/
@@ -464,7 +494,7 @@ ATML_Sepsis_Alert/
 | ML model | sklearn HistGradientBoosting + Optuna | Best-in-class tabular, no native deps, Bayesian-tuned |
 | Explainability | SHAP | Industry standard, directly interpretable |
 | AI Safety | Custom guardrails | OOD detection, narrative validation, audit log |
-| Narrative LLM | Ollama / mistral:7b | On-premise, GDPR-compliant, zero per-call cost |
+| Narrative LLM | Ollama / mistral:7b (default) or Claude API (optional) | On-premise default for GDPR; Claude API for GPU-free deployments |
 | Narrative improvement | Few-shot + RAG (cosine SHAP similarity) | Quality improves with use, no retraining required |
 | Audio feedback | OpenAI Whisper (local) | Voice correction notes, no cloud call |
 | EHR integration | HL7 FHIR R4 adapter | Compatible with Epic / Oracle Health (Cerner) |
