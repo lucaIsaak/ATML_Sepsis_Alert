@@ -55,7 +55,7 @@ def transcribe_audio(audio_file, model_size: str | None = None) -> str:
             "Install with: brew install ffmpeg"
         )
 
-    size = model_size or os.getenv("WHISPER_MODEL", "tiny")
+    size = model_size or os.getenv("WHISPER_MODEL", "small")
     suffix = _detect_suffix(audio_file)
     audio_bytes = audio_file.read()
 

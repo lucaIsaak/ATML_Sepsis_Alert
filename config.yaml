@@ -25,13 +25,26 @@ model:
   class_weight: "balanced"  # Without balancing, model achieves 78% accuracy by predicting "no sepsis" for all patients
 
 narrative:
-  provider: "ollama"            # MUST be "ollama" for GDPR compliance — patient feature data is included
-                                # in the LLM prompt and must never leave the hospital network.
-                                # "claude" / "huggingface" options are listed for future BAA-covered
-                                # deployments only; non-ollama providers are hard-blocked by a 403
-                                # gate in src/api/routers/narrative.py until config validation is added.
+  # ── Provider selection ────────────────────────────────────────────────────
+  # "ollama"  (default) — on-premise, GDPR-safe, zero per-call cost.
+  #                        Requires a local GPU node running `ollama serve`.
+  # "claude"            — Anthropic Claude API (cloud).
+  #                        Faster, no GPU required, ~€0.001/narrative (Haiku).
+  #                        GDPR requirement: sign a DPA with Anthropic (Art. 28)
+  #                        and set gdpr_cloud_dpa_acknowledged: true below.
+  #                        Set ANTHROPIC_API_KEY in your environment / .env file.
+  provider: "ollama"
+
+  # ── Ollama (on-premise) ───────────────────────────────────────────────────
   ollama_model: "mistral:7b"    # On-premise model — no patient data leaves the hospital network
   ollama_base_url: "http://localhost:11434"
+
+  # ── Claude (cloud) ────────────────────────────────────────────────────────
+  # Uncomment and set provider: "claude" to use the Claude API.
+  # claude_model: "claude-haiku-4-5-20251001"   # fast + cheap (recommended)
+  # claude_model: "claude-sonnet-4-6"           # higher quality, ~7x more expensive
+  # gdpr_cloud_dpa_acknowledged: false          # set true once DPA with Anthropic is signed
+
   max_tokens: 300               # Enforces the 5-sentence brevity rule — longer outputs increase alert fatigue
 
 agent:

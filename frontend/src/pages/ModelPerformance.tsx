@@ -131,7 +131,7 @@ function FeedbackAgentCard() {
                 <span className="font-medium">{status.confirmed_sepsis}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Flagged wrong</span>
+                <span className="text-muted-foreground">No sepsis labels</span>
                 <span className="font-medium">{status.flagged_wrong}</span>
               </div>
               <div className="flex justify-between">
