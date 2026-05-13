@@ -13,6 +13,7 @@ optuna>=3.6.0
 ollama>=0.2.0
 requests>=2.31.0
 openai-whisper>=20231117    # local speech-to-text for audio feedback (requires: brew install ffmpeg)
+anthropic>=0.40.0           # optional — Claude API backend (requires ANTHROPIC_API_KEY + signed DPA with Anthropic)
 
 # Plotting (used by evaluate.py)
 plotly>=5.20.0

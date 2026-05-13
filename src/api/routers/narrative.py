@@ -17,6 +17,7 @@ from pydantic import BaseModel, field_validator
 from src.api.routers.patients import _shap_cache, _ood_cache, _risk_label
 from src.explainability.shap_explainer import SHAPExplanation, format_for_narrative
 from src.narrative.ollama_client import OllamaClient
+from src.narrative.claude_client import ClaudeClient, CLAUDE_MODELS
 from src.narrative.narrative_agent import NarrativeAgent
 from src.data.narrative_feedback import load_few_shot_examples, find_similar_narratives
 from src.safety.guardrails import NarrativeGuard, AuditLogger, OODResult, NarrativeResult
@@ -41,11 +42,17 @@ class StreamRequest(BaseModel):
 
 @router.get("/narrative/models")
 async def list_models(request: Request) -> list[str]:
-    """Return list of available Ollama model name strings."""
+    """Return available model names for the selected narrative provider."""
     cfg = request.app.state.cfg
+    provider = cfg["narrative"].get("provider", "ollama")
+
+    if provider == "claude":
+        # Claude models are static — no network call needed
+        return CLAUDE_MODELS
+
+    # Default: Ollama — query local tag list
     base_url = cfg["narrative"]["ollama_base_url"]
     try:
-        # Run blocking requests.get in thread pool — keeps the event loop free
         loop = asyncio.get_running_loop()
         resp = await loop.run_in_executor(
             None, lambda: requests.get(f"{base_url}/api/tags", timeout=5)
@@ -54,7 +61,6 @@ async def list_models(request: Request) -> list[str]:
         models = resp.json().get("models", [])
         return [m["name"] for m in models]
     except requests.exceptions.RequestException:
-        # Return empty list — frontend shows "Ollama not available"
         return []
 
 
@@ -134,20 +140,30 @@ async def stream_narrative(body: StreamRequest, request: Request):
     cfg_copy["narrative"] = dict(cfg["narrative"])
     cfg_copy["narrative"]["ollama_model"] = model_name
 
-    # GDPR hard gate — patient data must never leave the hospital server.
-    # Non-local providers (claude, huggingface) are explicitly blocked.
-    if cfg_copy["narrative"].get("provider", "ollama") != "ollama":
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                "Non-local narrative providers are disabled for GDPR compliance. "
-                "Patient data must not leave the hospital server. "
-                "Set narrative.provider to 'ollama' in config.yaml."
-            ),
-        )
+    # Provider selection — Ollama (default, GDPR-safe) or Claude (cloud, requires DPA)
+    provider = cfg_copy["narrative"].get("provider", "ollama")
 
-    client = OllamaClient(cfg_copy)
-    agent  = NarrativeAgent(client)
+    if provider == "claude":
+        # Cloud provider: require explicit DPA acknowledgement in config
+        if not cfg_copy["narrative"].get("gdpr_cloud_dpa_acknowledged", False):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Claude API requires a signed Data Processing Agreement (DPA) "
+                    "with Anthropic under GDPR Art. 28. "
+                    "Set narrative.gdpr_cloud_dpa_acknowledged: true in config.yaml "
+                    "once the DPA is in place."
+                ),
+            )
+        try:
+            cfg_copy["narrative"]["claude_model"] = model_name
+            client = ClaudeClient(cfg_copy)
+        except (RuntimeError, ImportError) as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+    else:
+        client = OllamaClient(cfg_copy)
+
+    agent = NarrativeAgent(client)
     shap_summary = format_for_narrative(explanation)
 
     # Build flat feature dict from predictions row for the narrative agent
