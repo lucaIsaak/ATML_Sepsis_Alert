@@ -77,43 +77,7 @@ Current tools (NEWS2, SIRS) are static, rule-based, and provide **no explanation
 
 ## Architecture
 
-```
-MIMIC-IV / Hospital EHR (FHIR R4)
-         |
-    +----v----+
-    |  DuckDB  |   <- fast SQL directly on raw .csv.gz files
-    +----+----+
-         |  cohort + features (24h rolling windows, trend slopes)
-    +----v-------------------------------+
-    |  HistGradientBoosting              |   <- trained on MIMIC-IV, Sepsis-3 labels
-    |  (sklearn, Optuna-tuned)           |   <- AUROC 0.8276 vs NEWS2 0.606 (+22.1pp)
-    +----+-------------------------------+
-         |  risk score (0-1)
-    +----v-------------------------------+
-    |  AI Safety Guardrails              |   <- OOD detection, narrative validation,
-    |  (src/safety/guardrails.py)        |      audit log (GDPR / EU AI Act)
-    +----+-------------------------------+
-         |
-    +----v------+
-    |   SHAP    |   <- top feature drivers per patient
-    +----+------+
-         |  feature importances + clinical reference ranges
-    +----v------------------------------+
-    |  Narrative Generator              |
-    |  Ollama / mistral:7b (local)      |   <- on-premise, GDPR-safe, streaming
-    |  Few-shot + RAG context           |   <- learns from clinician ratings
-    +----+------------------------------+
-         |  SBAR-structured clinical explanation
-    +----v---------------------+
-    |  PatientMonitorAgent     |   <- ReAct-pattern monitoring loop
-    |  4-tier escalation       |      NONE -> NURSE -> DOCTOR -> CRITICAL
-    +----+---------------------+
-         |
-    +----v----------------------------------+
-    |  React + FastAPI                      |
-    |  (frontend/ + src/api/)               |   <- SPA + REST API, audit log at /audit
-    +---------------------------------------+
-```
+![Architecture](docs/architecture.png)
 
 ---
 
