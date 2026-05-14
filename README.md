@@ -23,7 +23,7 @@
 
 ¹ 95% CI via 1 000-iteration stratified bootstrap resampling (Efron & Tibshirani 1993). Run `python -m src.model.evaluate` to reproduce. CI consistent with Johnson et al. 2023 [0.85, 0.89] on MIMIC-IV.
 
-> Full evaluation methodology: [EVALUATION_GUIDE.md](EVALUATION_GUIDE.md) · Model details: [MODEL_CARD.md](MODEL_CARD.md) · Demo Video: youtube.com/watch?v=pH3xdFhUCRA&feature=youtu.be
+> Full evaluation methodology: [EVALUATION_GUIDE.md](EVALUATION_GUIDE.md) · Model details: [MODEL_CARD.md](MODEL_CARD.md) · Demo Video in case the setup takes too long: [UI-Demo](youtube.com/watch?v=pH3xdFhUCRA&feature=youtu.be)
 
 ---
 
